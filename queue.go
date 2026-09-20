@@ -53,7 +53,36 @@ type Queue struct {
 	notFull  *Event
 	cfg      config
 	owner    bool
-	closed   bool
+
+	// closing and active gate the unmap. An operation in flight holds a
+	// pointer into the segment, so Close must wait for it to leave rather
+	// than pull the mapping out from under it.
+	closing atomic.Bool
+	active  atomic.Int64
+	drained chan struct{}
+}
+
+// enter registers an operation against the mapping. It reports false once the
+// queue is closing, in which case the caller must not touch shared memory.
+func (q *Queue) enter() bool {
+	q.active.Add(1)
+	// Both this load and the store in Close are sequentially consistent, so
+	// one of the two sides always observes the other. Either Close waits for
+	// this operation, or this operation backs out.
+	if q.closing.Load() {
+		q.leave()
+		return false
+	}
+	return true
+}
+
+func (q *Queue) leave() {
+	if q.active.Add(-1) == 0 && q.closing.Load() {
+		select {
+		case q.drained <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // CreateQueue creates the named queue, replacing any stale instance of it. The
@@ -67,7 +96,7 @@ func CreateQueue(name string, opts ...Option) (*Queue, error) {
 		return nil, err
 	}
 
-	q := &Queue{name: name, cfg: cfg, owner: true}
+	q := &Queue{name: name, cfg: cfg, owner: true, drained: make(chan struct{}, 1)}
 
 	// The events come earliest and the segment last, so a peer that finds
 	// the segment also finds the events. The reverse order would hand an
@@ -107,7 +136,7 @@ func OpenQueue(name string, opts ...Option) (*Queue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
 	}
-	q := &Queue{name: name, seg: seg, cfg: cfg}
+	q := &Queue{name: name, seg: seg, cfg: cfg, drained: make(chan struct{}, 1)}
 
 	if q.ring, err = AttachRing(seg.Data()); err != nil {
 		q.unwind()
@@ -156,6 +185,9 @@ func (q *Queue) MaxMessageSize() int { return q.ring.MaxMessageSize() }
 
 // Ring exposes the underlying buffer for callers that want the non-blocking
 // primitives directly.
+//
+// The ring points into the mapping and carries no close guard of its own, so a
+// caller that keeps it must not use it after Close.
 func (q *Queue) Ring() *Ring { return q.ring }
 
 // wakeReceiver signals only when a receiver is parked, so an active queue
@@ -211,9 +243,11 @@ func (q *Queue) TrySend(payload []byte) error {
 
 // TrySendTyped is TrySend with an explicit message type.
 func (q *Queue) TrySendTyped(typ uint32, payload []byte) error {
-	if q.closed {
+	if !q.enter() {
 		return ErrClosed
 	}
+	defer q.leave()
+
 	if err := q.ring.TryWrite(typ, payload); err != nil {
 		return err
 	}
@@ -229,9 +263,11 @@ func (q *Queue) Send(ctx context.Context, payload []byte) error {
 
 // SendTyped is Send with an explicit message type.
 func (q *Queue) SendTyped(ctx context.Context, typ uint32, payload []byte) error {
-	if q.closed {
+	if !q.enter() {
 		return ErrClosed
 	}
+	defer q.leave()
+
 	err := park(ctx, q.notFull, &q.ring.hdr.sendWaiters, ErrFull, func() error {
 		return q.ring.TryWrite(typ, payload)
 	})
@@ -248,9 +284,11 @@ func (q *Queue) SendTyped(ctx context.Context, typ uint32, payload []byte) error
 // The returned claim must be committed or aborted; until then the receiver
 // stops at it. This is the allocation-free send path.
 func (q *Queue) Claim(ctx context.Context, typ uint32, length int) (Claim, error) {
-	if q.closed {
+	if !q.enter() {
 		return Claim{}, ErrClosed
 	}
+	defer q.leave()
+
 	var c Claim
 	err := park(ctx, q.notFull, &q.ring.hdr.sendWaiters, ErrFull, func() error {
 		var err error
@@ -264,9 +302,28 @@ func (q *Queue) Claim(ctx context.Context, typ uint32, length int) (Claim, error
 }
 
 // Commit publishes a claim and wakes a parked receiver.
+//
+// A claim points into the mapping, so it must be committed or aborted before
+// the queue is closed.
 func (q *Queue) Commit(c Claim) {
+	if !q.enter() {
+		return
+	}
+	defer q.leave()
+
 	c.Commit()
 	q.wakeReceiver()
+}
+
+// Abort discards a claim. The reader skips the region and reclaims it.
+func (q *Queue) Abort(c Claim) {
+	if !q.enter() {
+		return
+	}
+	defer q.leave()
+
+	c.Abort()
+	q.wakeSenders()
 }
 
 // TryRecv copies the next message into dst and returns its type and payload.
@@ -274,9 +331,11 @@ func (q *Queue) Commit(c Claim) {
 //
 // When dst has room the payload is written into it and no allocation happens.
 func (q *Queue) TryRecv(dst []byte) (uint32, []byte, error) {
-	if q.closed {
+	if !q.enter() {
 		return 0, nil, ErrClosed
 	}
+	defer q.leave()
+
 	typ, msg, err := q.ring.TryRecv(dst)
 	if err != nil {
 		return 0, nil, err
@@ -295,9 +354,11 @@ func (q *Queue) Recv(ctx context.Context) (uint32, []byte, error) {
 // dst when dst is large enough, so a reused buffer makes receiving allocation
 // free.
 func (q *Queue) RecvInto(ctx context.Context, dst []byte) (uint32, []byte, error) {
-	if q.closed {
+	if !q.enter() {
 		return 0, nil, ErrClosed
 	}
+	defer q.leave()
+
 	var (
 		typ uint32
 		msg []byte
@@ -320,9 +381,11 @@ func (q *Queue) RecvInto(ctx context.Context, dst []byte) (uint32, []byte, error
 // Draining a burst in a single call amortizes the cursor update and the
 // sender wakeup across the whole batch.
 func (q *Queue) ReadBatch(ctx context.Context, limit int, fn ReadFunc) (int, error) {
-	if q.closed {
+	if !q.enter() {
 		return 0, ErrClosed
 	}
+	defer q.leave()
+
 	var count int
 	err := park(ctx, q.notEmpty, &q.ring.hdr.recvWaiters, ErrEmpty, func() error {
 		n, err := q.ring.Read(limit, fn)
@@ -344,16 +407,25 @@ func (q *Queue) ReadBatch(ctx context.Context, limit int, fn ReadFunc) (int, err
 
 // Close releases this process's handles on the queue. Other processes keep
 // theirs. Close does not remove the name; see Unlink.
+//
+// An operation blocked in Send or Recv returns ErrClosed, and Close waits for
+// every operation to let go before it unmaps the segment. Calling it from
+// another goroutine is therefore safe.
 func (q *Queue) Close() error {
-	if q.closed {
+	if !q.closing.CompareAndSwap(false, true) {
 		return ErrClosed
 	}
-	q.closed = true
 
+	// Closing the events releases whatever is parked on them, which is what
+	// lets the in-flight count fall to zero.
 	err := q.notEmpty.Close()
 	if cerr := q.notFull.Close(); err == nil {
 		err = cerr
 	}
+	if q.active.Load() > 0 {
+		<-q.drained
+	}
+
 	if cerr := q.seg.Close(); err == nil {
 		err = cerr
 	}

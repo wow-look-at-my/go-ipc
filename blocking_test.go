@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,24 +64,33 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 	)
 
 	idle, _ := newTestQueuePair(t, WithCapacity(MinCapacity))
-	full, fullSend := newTestQueuePair(t, WithCapacity(MinCapacity))
+	_, fullSend := newTestQueuePair(t, WithCapacity(MinCapacity))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var wg sync.WaitGroup
+
 	// A single receiver parked on an empty queue.
-	go func() { idle.Recv(ctx) }()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		idle.Recv(ctx)
+	}()
 
 	// Several senders parked on a queue with no room left.
 	payload := make([]byte, 504)
 	for fullSend.TrySend(payload) == nil {
 	}
 	for i := 0; i < senders; i++ {
-		go func() { fullSend.Send(ctx, payload) }()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fullSend.Send(ctx, payload)
+		}()
 	}
 
-	// Let every goroutine reach its park before the window opens; the
-	// handshake below costs a scheduling round trip, not a fixed delay.
+	// Let every goroutine reach its park before the window opens.
 	runtime.Gosched()
 
 	before := cpuTime(t)
@@ -90,8 +100,9 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 	assert.Less(t, spent, budget,
 		"blocked endpoints burned %v of CPU across a %v window: something is spinning", spent, window)
 
-	// The queues must still work after all that waiting.
-	require.NoError(t, full.Close())
+	// The waiters must be gone before the queues unmap underneath them.
+	cancel()
+	wg.Wait()
 }
 
 // TestParkedWaitersHoldNoThreads measures the cost of a waiter that is asleep.

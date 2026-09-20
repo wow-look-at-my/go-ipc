@@ -2,32 +2,41 @@ package ipc
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
 	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 var payloadSizes = []int{16, 256, 4096}
+
+// A benchmark counts its failures rather than asserting inside the timed loop,
+// because an assertion helper measured per iteration would be reported as the
+// cost of the operation under test.
 
 func BenchmarkRingWriteRead(b *testing.B) {
 	for _, size := range payloadSizes {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			r, err := InitRing(make([]byte, RingSize(1<<20)))
-			require.Nil(b, err)
+			require.NoError(b, err)
 
 			payload := make([]byte, size)
 			dst := make([]byte, size)
+			fails := 0
 
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				require.NoError(b, r.TryWrite(0, payload))
-
-				_, _, err = r.TryRecv(dst)
-				require.Nil(b, err)
-
+				if r.TryWrite(0, payload) != nil {
+					fails++
+				}
+				if _, _, rerr := r.TryRecv(dst); rerr != nil {
+					fails++
+				}
 			}
+			b.StopTimer()
+			require.Zero(b, fails)
 		})
 	}
 }
@@ -38,24 +47,32 @@ func BenchmarkRingClaimCommit(b *testing.B) {
 	for _, size := range payloadSizes {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			r, err := InitRing(make([]byte, RingSize(1<<20)))
-			require.Nil(b, err)
+			require.NoError(b, err)
+
+			fails := 0
 
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				c, err := r.TryClaim(0, size)
-				require.Nil(b, err)
-
+				c, cerr := r.TryClaim(0, size)
+				if cerr != nil {
+					fails++
+					continue
+				}
 				c.Bytes[0] = byte(i)
 				c.Commit()
-				_, err = r.Read(1, func(uint32, []byte) {})
-				require.Nil(b, err)
-
+				if _, rerr := r.Read(1, discard); rerr != nil {
+					fails++
+				}
 			}
+			b.StopTimer()
+			require.Zero(b, fails)
 		})
 	}
 }
+
+func discard(uint32, []byte) {}
 
 // BenchmarkQueuePingPong reports the round-trip latency between goroutines
 // through shared memory queues. It is the number that matters for a
@@ -63,16 +80,14 @@ func BenchmarkRingClaimCommit(b *testing.B) {
 func BenchmarkQueuePingPong(b *testing.B) {
 	name := "bench-pingpong-" + strconv.Itoa(int(nameCounter.Add(1)))
 	server, err := CreateChannel(name, WithCapacity(1<<16))
-	require.Nil(b, err)
-
+	require.NoError(b, err)
 	defer func() {
 		server.Close()
 		server.Unlink()
 	}()
 
 	client, err := OpenChannel(name)
-	require.Nil(b, err)
-
+	require.NoError(b, err)
 	defer client.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,27 +99,34 @@ func BenchmarkQueuePingPong(b *testing.B) {
 		defer close(done)
 		buf := make([]byte, 64)
 		for i := 0; i < b.N; i++ {
-			_, msg, err := server.RecvInto(ctx, buf)
-			if err != nil {
+			_, msg, rerr := server.RecvInto(ctx, buf)
+			if rerr != nil {
 				return
 			}
-			if err := server.Send(ctx, msg); err != nil {
+			if server.Send(ctx, msg) != nil {
 				return
 			}
 		}
 	}()
 
 	buf := make([]byte, 64)
+	fails := 0
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		require.NoError(b, client.Send(ctx, payload))
-
-		_, _, err = client.RecvInto(ctx, buf)
-		require.Nil(b, err)
-
+		if client.Send(ctx, payload) != nil {
+			fails++
+			break
+		}
+		if _, _, rerr := client.RecvInto(ctx, buf); rerr != nil {
+			fails++
+			break
+		}
 	}
 	b.StopTimer()
+
+	require.Zero(b, fails)
 	<-done
 }
 
@@ -115,16 +137,14 @@ func BenchmarkQueueThroughput(b *testing.B) {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			name := "bench-throughput-" + strconv.Itoa(int(nameCounter.Add(1)))
 			recv, err := CreateQueue(name, WithCapacity(1<<20))
-			require.Nil(b, err)
-
+			require.NoError(b, err)
 			defer func() {
 				recv.Close()
 				recv.Unlink()
 			}()
 
 			send, err := OpenQueue(name)
-			require.Nil(b, err)
-
+			require.NoError(b, err)
 			defer send.Close()
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -135,23 +155,28 @@ func BenchmarkQueueThroughput(b *testing.B) {
 			go func() {
 				defer close(done)
 				for i := 0; i < b.N; i++ {
-					if err := send.Send(ctx, payload); err != nil {
+					if send.Send(ctx, payload) != nil {
 						return
 					}
 				}
 			}()
 
+			read, fails := 0, 0
+
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
 			b.ResetTimer()
-			read := 0
 			for read < b.N {
-				n, err := recv.ReadBatch(ctx, 256, func(uint32, []byte) {})
-				require.Nil(b, err)
-
+				n, rerr := recv.ReadBatch(ctx, 256, discard)
+				if rerr != nil {
+					fails++
+					break
+				}
 				read += n
 			}
 			b.StopTimer()
+
+			require.Zero(b, fails)
 			<-done
 		})
 	}
