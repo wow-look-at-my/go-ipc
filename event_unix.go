@@ -40,9 +40,23 @@ type eventImpl struct {
 	gone atomic.Bool
 
 	mu     sync.Mutex
-	idle   []*os.File
-	open   []*os.File
+	idle   []*reader
+	open   []*reader
 	closed bool
+}
+
+// A reader is a handle a single waiter reads through, plus the cancel
+// function for it. The function is built with the handle so that a wait
+// hands context.AfterFunc an existing value rather than a fresh closure.
+type reader struct {
+	f      *os.File
+	cancel func()
+}
+
+func newReader(f *os.File) *reader {
+	r := &reader{f: f}
+	r.cancel = func() { r.f.SetReadDeadline(deadlinePast) }
+	return r
 }
 
 func createEventImpl(name string) (*eventImpl, error) {
@@ -83,18 +97,19 @@ func openFIFO(path string) (*os.File, error) {
 	return f, nil
 }
 
-// acquire hands out a reader handle, and opens a single when none is idle.
-func (e *eventImpl) acquire() (*os.File, error) {
+// acquire hands out a reader, and opens a handle when none is idle. The pool
+// therefore grows to the peak number of waiters this process ever had.
+func (e *eventImpl) acquire() (*reader, error) {
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
 		return nil, ErrClosed
 	}
 	if n := len(e.idle); n > 0 {
-		f := e.idle[n-1]
+		r := e.idle[n-1]
 		e.idle = e.idle[:n-1]
 		e.mu.Unlock()
-		return f, nil
+		return r, nil
 	}
 	e.mu.Unlock()
 
@@ -102,6 +117,7 @@ func (e *eventImpl) acquire() (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	r := newReader(f)
 
 	e.mu.Lock()
 	if e.closed {
@@ -109,24 +125,24 @@ func (e *eventImpl) acquire() (*os.File, error) {
 		f.Close()
 		return nil, ErrClosed
 	}
-	e.open = append(e.open, f)
+	e.open = append(e.open, r)
 	e.mu.Unlock()
-	return f, nil
+	return r, nil
 }
 
-// releaseFile returns a handle for the next waiter to use.
-func (e *eventImpl) releaseFile(f *os.File) {
+// releaseReader returns a handle for the next waiter to use.
+func (e *eventImpl) releaseReader(r *reader) {
 	// A cancellation that fired late can leave a deadline in the past. The
 	// reset here keeps the next waiter from an immediate spurious return,
 	// and its own retry covers the case where both race.
-	f.SetReadDeadline(time.Time{})
+	r.f.SetReadDeadline(time.Time{})
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return
 	}
-	e.idle = append(e.idle, f)
+	e.idle = append(e.idle, r)
 }
 
 func unlinkEventImpl(name string) error {
@@ -178,20 +194,20 @@ var deadlinePast = time.Unix(1, 0)
 // deadline touches nothing else. A token is consumed only by a read that
 // returns it, so a cancelled wait never swallows a wakeup.
 func (e *eventImpl) wait(ctx context.Context) error {
-	f, err := e.acquire()
+	r, err := e.acquire()
 	if err != nil {
 		return err
 	}
-	defer e.releaseFile(f)
+	defer e.releaseReader(r)
 
 	if ctx.Done() != nil {
-		stop := context.AfterFunc(ctx, func() { f.SetReadDeadline(deadlinePast) })
+		stop := context.AfterFunc(ctx, r.cancel)
 		defer stop()
 	}
 
 	var buf [1]byte
 	for {
-		n, rerr := f.Read(buf[:])
+		n, rerr := r.f.Read(buf[:])
 		if n == 1 {
 			return nil
 		}
@@ -204,8 +220,11 @@ func (e *eventImpl) wait(ctx context.Context) error {
 			}
 			// A deadline with no live cancellation behind it came from an
 			// earlier waiter whose cancellation landed after it let go.
-			f.SetReadDeadline(time.Time{})
-		case errors.Is(rerr, os.ErrClosed):
+			r.f.SetReadDeadline(time.Time{})
+		case errors.Is(rerr, os.ErrClosed), e.gone.Load():
+			// Close aborts an in-flight read by closing the handle under
+			// it. The flag covers the same case without a guess at which
+			// internal error the runtime reports for it.
 			return ErrClosed
 		default:
 			return rerr
@@ -229,8 +248,8 @@ func (e *eventImpl) close() error {
 	e.mu.Unlock()
 
 	var err error
-	for _, f := range readers {
-		if cerr := f.Close(); cerr != nil && err == nil {
+	for _, r := range readers {
+		if cerr := r.f.Close(); cerr != nil && err == nil {
 			err = cerr
 		}
 	}
