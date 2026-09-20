@@ -67,23 +67,25 @@ func CreateQueue(name string, opts ...Option) (*Queue, error) {
 		return nil, err
 	}
 
-	seg, err := shm.Create(name, RingSize(cfg.capacity))
-	if err != nil {
-		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
-	}
-	q := &Queue{name: name, seg: seg, cfg: cfg, owner: true}
+	q := &Queue{name: name, cfg: cfg, owner: true}
 
-	// The ring is formatted before the events exist, so a peer that opens
-	// the segment early cannot find a half-built queue with live events.
-	if q.ring, err = InitRing(seg.Data()); err != nil {
-		q.unwind()
-		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
-	}
+	// The events come first and the segment last, so a peer that finds the
+	// segment also finds the events. The reverse order would hand an opener
+	// a segment whose wakeup channels do not exist yet.
+	var err error
 	if q.notEmpty, err = CreateEvent(name + ".ne"); err != nil {
 		q.unwind()
 		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
 	}
 	if q.notFull, err = CreateEvent(name + ".nf"); err != nil {
+		q.unwind()
+		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
+	}
+	if q.seg, err = shm.Create(name, RingSize(cfg.capacity)); err != nil {
+		q.unwind()
+		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
+	}
+	if q.ring, err = InitRing(q.seg.Data()); err != nil {
 		q.unwind()
 		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
 	}
@@ -137,6 +139,9 @@ func (q *Queue) unwind() {
 	if q.owner {
 		unlinkEventImpl(q.name + ".ne")
 		unlinkEventImpl(q.name + ".nf")
+		if q.seg != nil {
+			q.seg.Unlink()
+		}
 	}
 }
 
