@@ -32,7 +32,7 @@ func TestEventDoesNotStealForeignWakeups(t *testing.T) {
 	defer cancel()
 
 	// Give the thief a live reader handle the only way a caller can: wait
-	// once and be released. The handle stays open in its pool afterwards.
+	// a single time and be released. The handle stays open in its pool afterwards.
 	require.NoError(t, thief.Signal())
 	require.NoError(t, thief.Wait(ctx))
 
