@@ -7,9 +7,9 @@ import (
 
 // An Event is a named wake channel between processes.
 //
-// Signal releases one waiter; SignalN releases n. A waiter parks the calling
-// goroutine and releases its thread, so thousands of waiters cost no more
-// than thousands of idle goroutines.
+// Signal releases a single waiter; SignalN releases n. A waiter parks the
+// calling goroutine and releases its thread, so thousands of waiters cost no
+// more than thousands of idle goroutines.
 //
 // An Event carries no state beyond pending wakeups. A signal delivered while
 // nobody waits is kept and released to the next waiter, so a caller that
@@ -33,7 +33,7 @@ type Event struct {
 	closeOnce sync.Once
 }
 
-// shut makes closing observable exactly once, from Close or from the pump.
+// shut makes closing observable exactly a single time, from Close or from the pump.
 func (e *Event) shut() {
 	e.shutOnce.Do(func() { close(e.closing) })
 }
@@ -77,8 +77,8 @@ func newEvent(impl eventImpl, name string, owner bool) *Event {
 // Name returns the name the event was created or opened with.
 func (e *Event) Name() string { return e.name }
 
-// Signal releases one waiter. It is safe from any goroutine or process that
-// holds the event open, and it never blocks.
+// Signal releases a single waiter. It is safe from any goroutine or process
+// that holds the event open, and it never blocks.
 func (e *Event) Signal() error { return e.SignalN(1) }
 
 // SignalN releases up to n waiters. Delivery is capped at the capacity of the
@@ -117,9 +117,9 @@ func (e *Event) Wait(ctx context.Context) error {
 	}
 }
 
-// pump moves wakeups off the operating system handle and onto e.tokens. One
-// pump serves every waiter in this process, so a kernel wait that does block a
-// thread blocks at most one per event.
+// pump moves wakeups off the operating system handle and onto e.tokens. a
+// single pump serves every waiter in this process, so a kernel wait that does
+// block a thread blocks at most a single per event.
 func (e *Event) pump() {
 	defer close(e.pumpDone)
 	for {
@@ -143,7 +143,7 @@ func (e *Event) Close() error {
 		e.shut()
 		err = e.impl.stop()
 		// Claiming pumpOnce stops a pump that has not started yet, so the
-		// wait below cannot outlast a Close that raced a first Wait.
+		// wait below cannot outlast a Close that raced a earliest Wait.
 		e.pumpOnce.Do(func() { close(e.pumpDone) })
 		<-e.pumpDone
 		if rerr := e.impl.release(); err == nil {

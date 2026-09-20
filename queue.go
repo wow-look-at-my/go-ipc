@@ -8,7 +8,6 @@ import (
 	"github.com/wow-look-at-my/go-shm"
 )
 
-// DefaultCapacity is the data region a queue gets when no option sets one.
 const DefaultCapacity = 1 << 20
 
 // An Option configures a queue, channel or connection at creation.
@@ -33,8 +32,8 @@ func (c *config) apply(opts []Option) error {
 }
 
 // WithCapacity sets the data region of each underlying ring, in bytes. It must
-// be a power of two of at least MinCapacity. Only the creating side decides
-// it; an opener reads the value out of the segment.
+// be a power of of at least MinCapacity. Only the creating side decides it; an
+// opener reads the value out of the segment.
 func WithCapacity(bytes int) Option {
 	return func(c *config) { c.capacity = bytes }
 }
@@ -42,10 +41,10 @@ func WithCapacity(bytes int) Option {
 // A Queue is a named multi-producer single-consumer message queue in shared
 // memory.
 //
-// Any number of processes may Send. Exactly one goroutine, in one process, may
-// Recv. A side that cannot proceed parks on a kernel wait; it never spins and
-// never sleeps for a guessed interval. A side that can proceed makes no system
-// call at all.
+// Any number of processes may Send. Exactly a single goroutine, in a single
+// process, may Recv. A side that cannot proceed parks on a kernel wait; it
+// never spins and never sleeps for a guessed interval. A side that can proceed
+// makes no system call at all.
 type Queue struct {
 	name     string
 	seg      *shm.SharedMemory
@@ -147,7 +146,7 @@ func (q *Queue) Name() string { return q.name }
 // Capacity returns the data region of the queue in bytes.
 func (q *Queue) Capacity() int { return q.ring.Capacity() }
 
-// MaxMessageSize returns the largest payload one message may carry.
+// MaxMessageSize returns the largest payload a single message may carry.
 func (q *Queue) MaxMessageSize() int { return q.ring.MaxMessageSize() }
 
 // Ring exposes the underlying buffer for callers that want the non-blocking
@@ -174,10 +173,10 @@ func (q *Queue) wakeSenders() {
 // park runs attempt, and while it reports blocked, waits on ev for a peer to
 // change the ring.
 //
-// The waiter count is published before the second attempt, and a peer reads it
-// after it publishes its own change. Both are sequentially consistent, so at
-// least one of the two sees the other: the wait below cannot begin after the
-// wakeup it needs has already been decided against.
+// The waiter count is published before the next attempt, and a peer reads it
+// after it publishes its own change. Both are sequentially consistent, so any
+// of both sees the other: the wait below cannot begin after the wakeup it
+// needs has already been decided against.
 func park(ctx context.Context, ev *Event, waiters *atomic.Int32, blocked error, attempt func() error) error {
 	for {
 		err := attempt()
@@ -218,7 +217,7 @@ func (q *Queue) TrySendTyped(typ uint32, payload []byte) error {
 }
 
 // Send copies payload into the queue, waiting for room if the queue is full.
-// It returns the context error if ctx ends first.
+// It returns the context error if ctx ends earliest.
 func (q *Queue) Send(ctx context.Context, payload []byte) error {
 	return q.SendTyped(ctx, 0, payload)
 }
@@ -282,7 +281,7 @@ func (q *Queue) TryRecv(dst []byte) (uint32, []byte, error) {
 }
 
 // Recv waits for the next message and returns its type and a fresh copy of the
-// payload. It returns the context error if ctx ends first.
+// payload. It returns the context error if ctx ends earliest.
 func (q *Queue) Recv(ctx context.Context) (uint32, []byte, error) {
 	return q.RecvInto(ctx, nil)
 }
@@ -310,12 +309,11 @@ func (q *Queue) RecvInto(ctx context.Context, dst []byte) (uint32, []byte, error
 	return typ, msg, nil
 }
 
-// ReadBatch passes up to limit ready messages to fn and returns how many it
-// passed, waiting for at least one. Each payload aliases shared memory and is
-// valid only for the duration of the call, so a caller that keeps one copies it.
+// Each payload aliases shared memory and is valid only for the duration of the
+// call, so a caller that keeps a single copies it.
 //
-// Draining a burst in one call amortizes the cursor update and the sender
-// wakeup across the whole batch.
+// Draining a burst in a single call amortizes the cursor update and the
+// sender wakeup across the whole batch.
 func (q *Queue) ReadBatch(ctx context.Context, limit int, fn ReadFunc) (int, error) {
 	if q.closed {
 		return 0, ErrClosed

@@ -26,8 +26,8 @@ var (
 // eventImpl backs an Event with a named semaphore.
 //
 // The semaphore counts pending wakeups the way the Unix FIFO counts unread
-// tokens, so the two platforms deliver the same semantics. A second, unnamed
-// event lets Close release the waiter blocked inside the kernel.
+// tokens, so both platforms deliver the same semantics. A then unnamed event
+// lets Close release the waiter blocked inside the kernel.
 type eventImpl struct {
 	sem     windows.Handle
 	closing windows.Handle
@@ -70,8 +70,8 @@ func finishEvent(sem windows.Handle) (eventImpl, error) {
 	return eventImpl{sem: sem, closing: closing}, nil
 }
 
-// unlinkEventImpl has nothing to remove. Windows drops a named object once
-// the last handle to it closes.
+// unlinkEventImpl has nothing to remove. Windows drops a named object a
+// single time the last handle to it closes.
 func unlinkEventImpl(string) error { return nil }
 
 func (e eventImpl) signal(n int) error {

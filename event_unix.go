@@ -94,7 +94,7 @@ func (e eventImpl) signal(n int) error {
 	return werr
 }
 
-// wait blocks the calling goroutine until one token arrives.
+// wait blocks the calling goroutine until a single token arrives.
 func (e eventImpl) wait() error {
 	var buf [1]byte
 	for {
