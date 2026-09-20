@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -34,9 +35,13 @@ type eventImpl struct {
 	path  string
 	write *os.File
 
+	// gone lets signal reject a closed event without the mutex, and without
+	// a guess at which internal error a closed handle reports.
+	gone atomic.Bool
+
 	mu     sync.Mutex
 	idle   []*os.File
-	open   map[*os.File]struct{}
+	open   []*os.File
 	closed bool
 }
 
@@ -60,11 +65,7 @@ func newEventImpl(path string) (*eventImpl, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &eventImpl{
-		path:  path,
-		write: w,
-		open:  make(map[*os.File]struct{}),
-	}, nil
+	return &eventImpl{path: path, write: w}, nil
 }
 
 func openFIFO(path string) (*os.File, error) {
@@ -108,7 +109,7 @@ func (e *eventImpl) acquire() (*os.File, error) {
 		f.Close()
 		return nil, ErrClosed
 	}
-	e.open[f] = struct{}{}
+	e.open = append(e.open, f)
 	e.mu.Unlock()
 	return f, nil
 }
@@ -144,9 +145,12 @@ func (e *eventImpl) signal(n int) error {
 	if n > pipeBuf {
 		n = pipeBuf
 	}
+	if e.gone.Load() {
+		return ErrClosed
+	}
 	rc, err := e.write.SyscallConn()
 	if err != nil {
-		return closedOr(err)
+		return err
 	}
 	var werr error
 	cerr := rc.Write(func(fd uintptr) bool {
@@ -159,18 +163,9 @@ func (e *eventImpl) signal(n int) error {
 		return true
 	})
 	if cerr != nil {
-		return closedOr(cerr)
+		return cerr
 	}
-	return closedOr(werr)
-}
-
-// closedOr reports a write to a handle this process already closed as the
-// package's own error, so a caller sees the same value on every platform.
-func closedOr(err error) error {
-	if err != nil && errors.Is(err, os.ErrClosed) {
-		return ErrClosed
-	}
-	return err
+	return werr
 }
 
 // deadlinePast is any instant already gone. Setting it aborts a blocked read.
@@ -227,10 +222,8 @@ func (e *eventImpl) close() error {
 		return ErrClosed
 	}
 	e.closed = true
-	readers := make([]*os.File, 0, len(e.open))
-	for f := range e.open {
-		readers = append(readers, f)
-	}
+	e.gone.Store(true)
+	readers := e.open
 	e.open = nil
 	e.idle = nil
 	e.mu.Unlock()

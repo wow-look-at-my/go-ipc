@@ -6,5 +6,6 @@ Shared-memory IPC for Go, without cgo. Layers: `Ring` (lock-free MPSC records in
 - `TestBlockedEndpointsConsumeNoCPU` and `TestParkedWaitersHoldNoThreads` enforce the rule above. Both are in `blocking_test.go`.
 - The ring header layout is a wire format shared between processes. A build-time assertion in `ring.go` fails if its size drifts. Bump `ringVersion` for any field change.
 - `Queue.Close` waits for in-flight operations before it unmaps. Any new method that touches shared memory calls `enter` and `leave` first.
+- An `Event` waiter reads the FIFO on a handle of its own, from a free list. Never share a reader handle. A read deadline cancels a wait, and it aborts every reader of the handle it is set on.
 - Cross-process tests re-execute the test binary through `TestMain` in `process_test.go`. Add a role there rather than a new binary.
 - docs/design.md -- layout, record format, wakeup protocol, close ordering, failure modes.
