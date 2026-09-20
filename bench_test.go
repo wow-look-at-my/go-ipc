@@ -33,8 +33,8 @@ func BenchmarkRingWriteRead(b *testing.B) {
 	}
 }
 
-// BenchmarkRingClaimCommit measures the zero-copy path, which skips the copy
-// that TryWrite makes.
+// BenchmarkRingClaimCommit measures the path that builds a message in place.
+// It skips the copy that TryWrite makes.
 func BenchmarkRingClaimCommit(b *testing.B) {
 	for _, size := range payloadSizes {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
@@ -61,9 +61,9 @@ func BenchmarkRingClaimCommit(b *testing.B) {
 	}
 }
 
-// BenchmarkQueuePingPong reports the round-trip latency between two
-// goroutines through two shared memory queues. It is the number that matters
-// for a request-response workload.
+// BenchmarkQueuePingPong reports the round-trip latency between goroutines
+// through shared memory queues. It is the number that matters for a
+// request-response workload.
 func BenchmarkQueuePingPong(b *testing.B) {
 	name := "bench-pingpong-" + strconv.Itoa(int(nameCounter.Add(1)))
 	server, err := CreateChannel(name, WithCapacity(1<<16))
@@ -115,7 +115,7 @@ func BenchmarkQueuePingPong(b *testing.B) {
 	<-done
 }
 
-// BenchmarkQueueThroughput streams messages between two goroutines without
+// BenchmarkQueueThroughput streams messages between goroutines without
 // waiting for a reply, which is where the ring's batching shows up.
 func BenchmarkQueueThroughput(b *testing.B) {
 	for _, size := range payloadSizes {
