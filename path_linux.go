@@ -1,3 +1,6 @@
+//go:build !cosmo
+
+
 package ipc
 
 import "path/filepath"
