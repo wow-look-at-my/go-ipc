@@ -114,7 +114,7 @@ func (c *Conn) translate(err error) error {
 	}
 }
 
-// Read implements io.Reader. It returns io.EOF a single time the peer has
+// Read implements io.Reader. It returns io.EOF after the peer has
 // closed and every byte it sent has been consumed.
 func (c *Conn) Read(p []byte) (int, error) {
 	c.readMu.Lock()

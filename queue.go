@@ -32,8 +32,8 @@ func (c *config) apply(opts []Option) error {
 }
 
 // WithCapacity sets the data region of each underlying ring, in bytes. It must
-// be a power of of at least MinCapacity. Only the creating side decides it; an
-// opener reads the value out of the segment.
+// be a power of 2, and at least MinCapacity. Only the creating side decides
+// it. An opener reads the value out of the segment.
 func WithCapacity(bytes int) Option {
 	return func(c *config) { c.capacity = bytes }
 }
@@ -41,10 +41,10 @@ func WithCapacity(bytes int) Option {
 // A Queue is a named multi-producer single-consumer message queue in shared
 // memory.
 //
-// Any number of processes may Send. Exactly a single goroutine, in a single
-// process, may Recv. A side that cannot proceed parks on a kernel wait; it
-// never spins and never sleeps for a guessed interval. A side that can proceed
-// makes no system call at all.
+// Any number of processes may Send. Recv has a single caller, in a single
+// process. A side that cannot proceed parks on a kernel wait. It never spins,
+// and it never sleeps for a guessed interval. A side that can proceed makes no
+// system call at all.
 type Queue struct {
 	name     string
 	seg      *shm.SharedMemory
@@ -62,13 +62,13 @@ type Queue struct {
 	drained chan struct{}
 }
 
-// enter registers an operation against the mapping. It reports false once the
-// queue is closing, in which case the caller must not touch shared memory.
+// enter registers an operation against the mapping. A false return means the
+// queue is closing, and the caller must then leave shared memory alone.
 func (q *Queue) enter() bool {
 	q.active.Add(1)
 	// Both this load and the store in Close are sequentially consistent, so
-	// one of the two sides always observes the other. Either Close waits for
-	// this operation, or this operation backs out.
+	// each side observes the other. Either Close waits for this operation,
+	// or this operation backs out.
 	if q.closing.Load() {
 		q.leave()
 		return false
@@ -211,9 +211,9 @@ func (q *Queue) wakeSenders() {
 // change the ring.
 //
 // The waiter count is published before the next attempt, and a peer reads it
-// after it publishes its own change. Both are sequentially consistent, so any
-// of both sees the other: the wait below cannot begin after the wakeup it
-// needs has already been decided against.
+// after it publishes its own change. Both are sequentially consistent, so each
+// side sees the other. The wait below cannot begin after a peer has already
+// decided against the wakeup it needs.
 func park(ctx context.Context, ev *Event, waiters *atomic.Int32, blocked error, attempt func() error) error {
 	for {
 		err := attempt()
@@ -375,11 +375,14 @@ func (q *Queue) RecvInto(ctx context.Context, dst []byte) (uint32, []byte, error
 	return typ, msg, nil
 }
 
-// Each payload aliases shared memory and is valid only for the duration of the
-// call, so a caller that keeps a single copies it.
+// ReadBatch passes up to limit ready messages to fn and returns how many it
+// passed. It waits for at least a message to arrive.
 //
-// Draining a burst in a single call amortizes the cursor update and the
-// sender wakeup across the whole batch.
+// Each payload aliases shared memory and stays valid only for the duration of
+// the call. A caller that keeps a payload must copy it.
+//
+// A batch amortizes the cursor update and the sender wakeup across every
+// message it drains.
 func (q *Queue) ReadBatch(ctx context.Context, limit int, fn ReadFunc) (int, error) {
 	if !q.enter() {
 		return 0, ErrClosed
@@ -417,7 +420,7 @@ func (q *Queue) Close() error {
 	}
 
 	// Closing the events releases whatever is parked on them, which is what
-	// lets the in-flight count fall to zero.
+	// lets the in-flight count fall to empty.
 	err := q.notEmpty.Close()
 	if cerr := q.notFull.Close(); err == nil {
 		err = cerr

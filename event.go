@@ -33,7 +33,7 @@ type Event struct {
 	closeOnce sync.Once
 }
 
-// shut makes closing observable exactly a single time, from Close or from the pump.
+// shut publishes the close exactly once, from Close or from the pump.
 func (e *Event) shut() {
 	e.shutOnce.Do(func() { close(e.closing) })
 }
