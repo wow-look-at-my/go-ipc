@@ -105,9 +105,13 @@ The constructor proves that property rather than assumes it. It sets a read dead
 
 A signal writes one byte per waiter through a raw non-blocking write. A full pipe already holds more pending wakeups than there are waiters. A dropped write therefore costs nothing.
 
-One goroutine per event reads the handle. It hands each token to a waiter over an unbuffered channel. The unbuffered handoff matters: a token that the reader took but has not delivered still belongs to the reader. That is what stops an early signal from a drop. A waiter selects on that channel, on `ctx.Done` and on the close signal. Cancellation therefore needs no timer and no extra goroutine per call.
+A waiter reads the FIFO itself, through a handle of its own. It takes that handle from a free list and returns it on the way out. Cancellation then sets a read deadline on the private handle, which aborts this read and touches no other reader. A deadline on a shared handle aborts every reader of it.
 
-On Windows an event is a named semaphore. The reader calls `WaitForMultipleObjects` over that semaphore and a private close handle. This wait does occupy a thread. It occupies one per event, whatever the number of goroutines that wait.
+A token is consumed only by a read that returns it. A cancelled wait therefore swallows no wakeup. A signal that arrives before any waiter stays in the pipe until a waiter reads it.
+
+An earlier design put a reader goroutine per event in front of the waiters and handed tokens on over a channel. That code is gone. It cost a pair of goroutine handoffs on every wakeup, measured at about 11 microseconds per round trip on the development machine. It also carried a defect that the current design cannot express. A reader that ran while its own process had no waiter took a wakeup that a waiter in another process needed, and stranded it.
+
+On Windows an event is a named semaphore. A waiter calls `WaitForMultipleObjects` over that semaphore, a shared close handle, and a cancel handle of its own. This wait does occupy a thread for its duration, which the Unix poller avoids. The Go runtime hands the processor to another thread meanwhile, so other goroutines keep running.
 
 ## Closing
 

@@ -29,7 +29,7 @@ var signalTokens = make([]byte, pipeBuf)
 //
 // A waiter reads through a handle of its own, taken from idle. That is what
 // makes a read deadline usable for cancellation: a deadline set on a shared
-// handle would abort every reader of it, not just the one that cancelled.
+// handle would abort every reader of it, not just the thing that cancelled.
 type eventImpl struct {
 	path  string
 	write *os.File
@@ -82,7 +82,7 @@ func openFIFO(path string) (*os.File, error) {
 	return f, nil
 }
 
-// acquire hands out a reader handle, and opens one when none is idle.
+// acquire hands out a reader handle, and opens a single when none is idle.
 func (e *eventImpl) acquire() (*os.File, error) {
 	e.mu.Lock()
 	if e.closed {
@@ -117,7 +117,7 @@ func (e *eventImpl) acquire() (*os.File, error) {
 func (e *eventImpl) releaseFile(f *os.File) {
 	// A cancellation that fired late can leave a deadline in the past. The
 	// reset here keeps the next waiter from an immediate spurious return,
-	// and its own retry covers the case where the two race.
+	// and its own retry covers the case where both race.
 	f.SetReadDeadline(time.Time{})
 
 	e.mu.Lock()
@@ -146,7 +146,7 @@ func (e *eventImpl) signal(n int) error {
 	}
 	rc, err := e.write.SyscallConn()
 	if err != nil {
-		return err
+		return closedOr(err)
 	}
 	var werr error
 	cerr := rc.Write(func(fd uintptr) bool {
@@ -159,9 +159,18 @@ func (e *eventImpl) signal(n int) error {
 		return true
 	})
 	if cerr != nil {
-		return cerr
+		return closedOr(cerr)
 	}
-	return werr
+	return closedOr(werr)
+}
+
+// closedOr reports a write to a handle this process already closed as the
+// package's own error, so a caller sees the same value on every platform.
+func closedOr(err error) error {
+	if err != nil && errors.Is(err, os.ErrClosed) {
+		return ErrClosed
+	}
+	return err
 }
 
 // deadlinePast is any instant already gone. Setting it aborts a blocked read.
@@ -210,7 +219,7 @@ func (e *eventImpl) wait(ctx context.Context) error {
 }
 
 // close releases every handle. A read in flight fails, because the Go poller
-// aborts one on a closed file, which is what releases a parked waiter.
+// aborts a single on a closed file, which is what releases a parked waiter.
 func (e *eventImpl) close() error {
 	e.mu.Lock()
 	if e.closed {

@@ -40,12 +40,15 @@ type eventImpl struct {
 	closing windows.Handle
 
 	// waiters keeps the handles alive until the last wait leaves. Closing a
-	// handle that a thread is blocked on is not safe, so close signals first
-	// and frees only after the count reaches zero.
+	// handle that a thread is blocked on is not safe, so close signals
+	// earliest and frees only after the count reaches empty.
 	mu      sync.Mutex
 	waiters atomic.Int64
 	drained chan struct{}
 	closed  bool
+
+	// gone lets signal reject a closed event without the mutex.
+	gone atomic.Bool
 }
 
 // objectName puts the semaphore in the caller's logon session. A cross-session
@@ -85,11 +88,14 @@ func finishEvent(sem windows.Handle) (*eventImpl, error) {
 	return &eventImpl{sem: sem, closing: closing, drained: make(chan struct{}, 1)}, nil
 }
 
-// unlinkEventImpl has nothing to remove. Windows drops a named object once
-// the last handle to it closes.
+// unlinkEventImpl has nothing to remove. Windows drops a named object a
+// single time the last handle to it closes.
 func unlinkEventImpl(string) error { return nil }
 
 func (e *eventImpl) signal(n int) error {
+	if e.gone.Load() {
+		return ErrClosed
+	}
 	ok, _, callErr := procReleaseSema.Call(uintptr(e.sem), uintptr(n), 0)
 	if ok == 0 {
 		// A saturated semaphore already holds more wakeups than there
@@ -174,6 +180,7 @@ func (e *eventImpl) close() error {
 		return ErrClosed
 	}
 	e.closed = true
+	e.gone.Store(true)
 	e.mu.Unlock()
 
 	if err := windows.SetEvent(e.closing); err != nil {
