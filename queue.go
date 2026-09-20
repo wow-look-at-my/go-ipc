@@ -31,9 +31,8 @@ func (c *config) apply(opts []Option) error {
 	return nil
 }
 
-// WithCapacity sets the data region of each underlying ring, in bytes. It must
-// be a power of 2, and at least MinCapacity. Only the creating side decides
-// it. An opener reads the value out of the segment.
+// WithCapacity sets the data region of each underlying ring, in bytes. Only
+// the creating side decides it. An opener reads the value out of the segment.
 func WithCapacity(bytes int) Option {
 	return func(c *config) { c.capacity = bytes }
 }

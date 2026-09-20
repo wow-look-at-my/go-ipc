@@ -75,14 +75,13 @@ type Ring struct {
 }
 
 // RingSize returns the buffer size needed for a ring with the given data
-// capacity. That capacity must be a power of 2, and at least MinCapacity bytes.
+// capacity.
 func RingSize(capacity int) int {
 	return HeaderSize + capacity
 }
 
 // InitRing formats buf as an empty ring and returns a handle to it.
 //
-// The data capacity is the largest power of 2 that fits after the header.
 // Every byte of buf is overwritten. InitRing has a single caller, and every
 // other participant calls AttachRing.
 func InitRing(buf []byte) (*Ring, error) {
