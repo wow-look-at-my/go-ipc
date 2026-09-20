@@ -161,6 +161,67 @@ func TestQueueClaimCommit(t *testing.T) {
 	assert.Equal(t, "zero", string(msg))
 }
 
+// TestQueueAbortReclaimsSpace covers the claim a sender gives up on. The
+// receiver must skip it rather than deliver it, and the space must come back.
+func TestQueueAbortReclaimsSpace(t *testing.T) {
+	recv, send := newTestQueuePair(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	c, err := send.Claim(ctx, 7, 64)
+	require.NoError(t, err)
+	send.Abort(c)
+
+	_, _, err = recv.TryRecv(nil)
+	require.ErrorIs(t, err, ErrEmpty, "an aborted claim must not reach the receiver")
+	assert.True(t, recv.Ring().Empty())
+
+	require.NoError(t, send.Send(ctx, []byte("next")))
+	typ, msg, err := recv.Recv(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), typ)
+	assert.Equal(t, "next", string(msg))
+}
+
+// TestQueueAbortReleasesParkedSender covers a deadlock an abort can leave.
+//
+// An abort commits a padding record. That frees no space by itself: only the
+// receiver can step over padding and move the cursor. So the abort has to
+// reach a parked receiver, and the receiver has to announce the space it frees
+// even though padding delivers no message. Miss either half and the sender
+// below waits for a wakeup nobody sends.
+func TestQueueAbortReleasesParkedSender(t *testing.T) {
+	recv, send := newTestQueuePair(t, WithCapacity(MinCapacity))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Claim most of the ring, then fill what is left.
+	held, err := send.Claim(ctx, 1, 1024)
+	require.NoError(t, err)
+
+	payload := make([]byte, 504)
+	for send.TrySend(payload) == nil {
+	}
+
+	// This receiver parks: every record ahead of it sits behind the claim.
+	received := make(chan error, 1)
+	go func() {
+		_, _, rerr := recv.Recv(ctx)
+		received <- rerr
+	}()
+
+	// This sender parks: the ring has no room until the claim resolves.
+	parked := make(chan error, 1)
+	go func() { parked <- send.Send(ctx, payload) }()
+
+	send.Abort(held)
+
+	require.NoError(t, <-received)
+	require.NoError(t, <-parked, "the sender never woke after the abort")
+}
+
 func TestQueueReadBatchDrainsBurst(t *testing.T) {
 	recv, send := newTestQueuePair(t)
 
