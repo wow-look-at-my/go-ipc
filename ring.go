@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"math"
 	"math/bits"
 	"sync/atomic"
 	"unsafe"
@@ -138,8 +139,15 @@ func (r *Ring) Capacity() int { return int(r.mask) + 1 }
 // MaxMessageSize returns the largest payload a single record may carry.
 //
 // The limit is half the capacity so that a claim always fits even when the
-// wrap point forces a padding record ahead of it.
-func (r *Ring) MaxMessageSize() int { return r.Capacity()/2 - RecordHeaderSize }
+// wrap point forces a padding record ahead of it. A record length is an int32
+// on the wire, which caps the limit again on a very large ring.
+func (r *Ring) MaxMessageSize() int {
+	limit := r.Capacity()/2 - RecordHeaderSize
+	if limit > math.MaxInt32-RecordHeaderSize {
+		limit = math.MaxInt32 - RecordHeaderSize
+	}
+	return limit
+}
 
 // Buffered returns the number of bytes claimed but not yet consumed. It is a
 // point-in-time sample of a value other participants are changing.

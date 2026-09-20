@@ -14,7 +14,7 @@ import (
 // The benchmarks here bound what a parked round trip can cost on the machine
 // running them. A queue round trip cannot beat the goroutine handoff, and it
 // cannot beat the kernel round trip that carries the wakeup between processes.
-// Read BenchmarkQueuePingPong against these, not against zero.
+// Read BenchmarkQueuePingPong against these, not against empty.
 
 // BenchmarkGoChannelPingPong is the scheduler floor: a round trip between
 // goroutines with no kernel involved at all.
