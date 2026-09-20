@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestConnPair returns the two ends of a connection and removes the name
+// newTestConnPair returns both ends of a connection and removes the name
 // afterwards. Both live in this process, which the stream layer allows: the
 // queues underneath carry the direction.
 func newTestConnPair(t *testing.T, opts ...Option) (*Conn, *Conn) {
@@ -48,8 +48,8 @@ func TestConnRoundTrip(t *testing.T) {
 	assert.Equal(t, "hello stream", string(got))
 }
 
-// TestConnSplitsAcrossMessages pushes more than one message worth of bytes so
-// the write splits and the read reassembles.
+// TestConnSplitsAcrossMessages pushes more than a single message worth of
+// bytes so the write splits and the read reassembles.
 func TestConnSplitsAcrossMessages(t *testing.T) {
 	server, client := newTestConnPair(t, WithCapacity(MinCapacity))
 	require.NoError(t, client.SetDeadline(time.Now().Add(30*time.Second)))
@@ -89,7 +89,7 @@ func TestConnReadDeadline(t *testing.T) {
 func TestConnWriteDeadline(t *testing.T) {
 	_, client := newTestConnPair(t, WithCapacity(MinCapacity))
 
-	// Nobody reads the other end, so the channel stays full once filled.
+	// Nobody reads the other end, so the channel stays full a single time filled.
 	require.NoError(t, client.SetWriteDeadline(time.Now().Add(20*time.Millisecond)))
 
 	payload := make([]byte, client.Channel().MaxMessageSize())

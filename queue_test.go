@@ -216,6 +216,10 @@ func TestQueueAbortReleasesParkedSender(t *testing.T) {
 	parked := make(chan error, 1)
 	go func() { parked <- send.Send(ctx, payload) }()
 
+	// Both peers must be genuinely asleep before the abort, or the test
+	// exercises the non-blocking path and proves nothing.
+	waitForWaiters(t, send, 1, 1)
+
 	send.Abort(held)
 
 	require.NoError(t, <-received)
