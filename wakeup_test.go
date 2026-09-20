@@ -33,8 +33,8 @@ func TestEventPumpDoesNotStealForeignWakeups(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Start the thief's reader the only way a caller can: by waiting once and
-	// being released. Its reader now lives for the rest of the process.
+	// Start the thief's reader the only way a caller can: by waiting a single
+	// time and being released. Its reader now lives for the rest of the process.
 	require.NoError(t, thief.Signal())
 	require.NoError(t, thief.Wait(ctx))
 
@@ -76,9 +76,9 @@ func TestQueueWakesSenderInAnotherProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Park a sender in this process first, then release it. That leaves a
-	// reader running here with no waiter behind it, which is the state that
-	// lets a wakeup go astray.
+	// Park a sender in this process then release it. That leaves a reader
+	// running here with no waiter behind it, which is the state that lets a
+	// wakeup go astray.
 	payload := make([]byte, 504)
 	for q.TrySend(payload) == nil {
 	}

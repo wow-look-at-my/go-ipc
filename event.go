@@ -30,8 +30,8 @@ type Event struct {
 	pumpDone chan struct{}
 
 	// waiting counts the goroutines inside Wait. The pump reads the handle
-	// only while that count is above zero, so a process with nobody waiting
-	// never takes a wakeup meant for a peer process.
+	// only while that count is above empty, so a process with nobody
+	// waiting never takes a wakeup meant for a peer process.
 	waiting  atomic.Int32
 	wakePump chan struct{}
 	idle     chan struct{}
@@ -41,8 +41,8 @@ type Event struct {
 	closeOnce sync.Once
 }
 
-// poke delivers a one-slot notification without ever blocking. A slot that is
-// already full carries the same meaning as the one being dropped.
+// poke delivers a notification over a single-slot channel and never blocks.
+// A slot that is already full carries the same meaning as the dropped send.
 func poke(ch chan struct{}) {
 	select {
 	case ch <- struct{}{}:
@@ -50,7 +50,7 @@ func poke(ch chan struct{}) {
 	}
 }
 
-// shut publishes the close exactly once, from Close or from the pump.
+// shut publishes the close exactly a single time, from Close or from the pump.
 func (e *Event) shut() {
 	e.shutOnce.Do(func() { close(e.closing) })
 }
@@ -127,7 +127,7 @@ func (e *Event) Wait(ctx context.Context) error {
 	e.pumpOnce.Do(func() { go e.pump() })
 
 	// Announce this waiter before the select. The pump reads the handle only
-	// while the count is above zero, so the announcement is what authorizes
+	// while the count is above empty, so the announcement is what authorizes
 	// this process to consume a wakeup at all.
 	e.waiting.Add(1)
 	poke(e.wakePump)
@@ -149,7 +149,7 @@ func (e *Event) Wait(ctx context.Context) error {
 
 // pump moves wakeups off the operating system handle and onto e.tokens. A
 // single pump serves every waiter in this process, so a kernel wait that does
-// block a thread blocks no more than one of them per event.
+// block a thread blocks no more than any of them per event.
 //
 // The pump is demand driven. A handle is shared between processes, so a pump
 // that read it with nobody waiting here would take a wakeup that a waiter in
