@@ -22,7 +22,7 @@ const (
 	childCountEnv = "GO_IPC_TEST_COUNT"
 )
 
-// TestMain turns the test binary into the second process when the role
+// TestMain turns the test binary into the next process when the role
 // variable is set. Re-executing the binary is how these tests reach a real
 // separate address space, which is the only place the shared memory claims
 // mean anything.
@@ -107,11 +107,11 @@ func startChild(t *testing.T, role, name string, count int) *exec.Cmd {
 	return cmd
 }
 
-// TestCrossProcessQueue proves the whole point of the package: a second
+// TestCrossProcessQueue proves the whole point of the package: another
 // process attaches by name, and its messages arrive in order.
 //
-// The parent blocks in Recv before the child has even started, so the first
-// message also exercises a wakeup delivered from another process.
+// The parent blocks in Recv before the child has even started, so the
+// earliest message also exercises a wakeup delivered from another process.
 func TestCrossProcessQueue(t *testing.T) {
 	const count = 5000
 
@@ -139,9 +139,9 @@ func TestCrossProcessQueue(t *testing.T) {
 	require.NoError(t, child.Wait())
 }
 
-// TestCrossProcessConnRoundTrip pushes a payload larger than one message
-// through the stream layer and back, so both the split on write and the
-// reassembly on read cross a process boundary.
+// TestCrossProcessConnRoundTrip pushes a payload larger than a single
+// message through the stream layer and back, so both the split on write
+// and the reassembly on read cross a process boundary.
 func TestCrossProcessConnRoundTrip(t *testing.T) {
 	name := uniqueName(t)
 	conn, err := Listen(name, WithCapacity(1<<16))

@@ -2,7 +2,7 @@ package ipc
 
 import "context"
 
-// A Channel is a bidirectional named endpoint between two processes.
+// A Channel is a bidirectional named endpoint between processes.
 //
 // It is a pair of queues with opposite directions, so each side sends on the
 // queue the other side receives from. The side that calls CreateChannel owns

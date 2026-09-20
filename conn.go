@@ -56,7 +56,7 @@ func (a addr) String() string  { return a.name }
 // creating half of a pair; the peer calls Dial with the same name.
 //
 // The name is a shared memory name, not a network address, and nothing is
-// accepted: a Conn carries exactly one peer.
+// accepted: a Conn carries exactly a single peer.
 func Listen(name string, opts ...Option) (*Conn, error) {
 	ch, err := CreateChannel(name, opts...)
 	if err != nil {
@@ -93,8 +93,8 @@ func newConn(ch *Channel, name string) *Conn {
 // boundaries back.
 func (c *Conn) Channel() *Channel { return c.ch }
 
-// deadlineContext builds the context for one operation. A connection close
-// cancels it too, so a blocked Read or Write returns promptly.
+// deadlineContext builds the context for a single operation. A connection
+// close cancels it too, so a blocked Read or Write returns promptly.
 func (c *Conn) deadlineContext(d *atomic.Pointer[time.Time]) (context.Context, context.CancelFunc) {
 	if t := d.Load(); t != nil && !t.IsZero() {
 		return context.WithDeadline(c.base, *t)
@@ -114,8 +114,8 @@ func (c *Conn) translate(err error) error {
 	}
 }
 
-// Read implements io.Reader. It returns io.EOF once the peer has closed and
-// every byte it sent has been consumed.
+// Read implements io.Reader. It returns io.EOF a single time the peer has
+// closed and every byte it sent has been consumed.
 func (c *Conn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()

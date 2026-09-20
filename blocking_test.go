@@ -48,7 +48,7 @@ func threadCount(t *testing.T) int {
 // this package does not busy-wait.
 //
 // A sender with nowhere to put its message and a receiver with nothing to read
-// are the two states an implementation is tempted to spin in. Both are parked
+// are both states an implementation is tempted to spin in. Both are parked
 // here for a fixed window, and the processor time the whole process spends in
 // that window is compared against the window itself. A spin loop would consume
 // a core per waiter and blow past the budget by orders of magnitude.
@@ -57,8 +57,8 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 		window  = 300 * time.Millisecond
 		senders = 8
 		// A parked process still wakes for the Go runtime's own timers, so
-		// the budget is not zero. It is far below what even one spinning
-		// goroutine would reach.
+		// the budget is not empty. It is far below what even a single
+		// spinning goroutine would reach.
 		budget = window / 10
 	)
 
@@ -68,7 +68,7 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// One receiver parked on an empty queue.
+	// A single receiver parked on an empty queue.
 	go func() { idle.Recv(ctx) }()
 
 	// Several senders parked on a queue with no room left.
@@ -94,12 +94,11 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 	require.NoError(t, full.Close())
 }
 
-// TestParkedWaitersHoldNoThreads checks the other half of the claim: a waiter
-// releases its thread rather than occupying one.
+// TestParkedWaitersHoldNoThreads measures the cost of a waiter that is asleep.
 //
-// An implementation that blocks in a plain system call would need one thread
-// per parked waiter. The Go poller backs these waits instead, so the thread
-// count barely moves.
+// An implementation that blocks in a plain system call would need a single
+// thread per parked waiter. The Go poller backs these waits instead, so the
+// thread count barely moves.
 func TestParkedWaitersHoldNoThreads(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("thread accounting reads /proc/self/status")

@@ -33,7 +33,7 @@ func TestInitRingRejectsBadBuffers(t *testing.T) {
 	_, err := InitRing(make([]byte, 16))
 	assert.ErrorIs(t, err, ErrTooSmall)
 
-	// One byte into an aligned allocation is guaranteed to be misaligned.
+	// A single byte into an aligned allocation is guaranteed to be misaligned.
 	buf := make([]byte, RingSize(MinCapacity)+8)
 	_, err = InitRing(buf[1:])
 	assert.ErrorIs(t, err, ErrUnaligned)
@@ -124,8 +124,8 @@ func TestRingReportsFull(t *testing.T) {
 func TestRingWrapsWithPadding(t *testing.T) {
 	r := newTestRing(t, MinCapacity)
 
-	// 300 bytes rounds to a 312-byte record, which divides 4096 unevenly and
-	// therefore straddles the wrap point on most laps.
+	// A 300-byte payload rounds to a 312-byte record, which divides the data
+	// region unevenly and therefore straddles the wrap point on most laps.
 	payload := make([]byte, 300)
 	for i := range payload {
 		payload[i] = byte(i)

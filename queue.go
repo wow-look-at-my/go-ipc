@@ -69,9 +69,9 @@ func CreateQueue(name string, opts ...Option) (*Queue, error) {
 
 	q := &Queue{name: name, cfg: cfg, owner: true}
 
-	// The events come first and the segment last, so a peer that finds the
-	// segment also finds the events. The reverse order would hand an opener
-	// a segment whose wakeup channels do not exist yet.
+	// The events come earliest and the segment last, so a peer that finds
+	// the segment also finds the events. The reverse order would hand an
+	// opener a segment whose wakeup channels do not exist yet.
 	var err error
 	if q.notEmpty, err = CreateEvent(name + ".ne"); err != nil {
 		q.unwind()

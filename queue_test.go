@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestQueuePair creates a queue and opens a second handle on it, the way
-// two processes would, and removes the name afterwards.
+// newTestQueuePair creates a queue and opens another handle on it, the way
+// processes would, and removes the name afterwards.
 func newTestQueuePair(t *testing.T, opts ...Option) (*Queue, *Queue) {
 	t.Helper()
 	name := uniqueName(t)
