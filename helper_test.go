@@ -18,7 +18,7 @@ var nameCounter atomic.Uint64
 //
 // A test that wants a peer to be genuinely asleep has to wait for it. Launching
 // the goroutine is not enough: it may not have run yet, and a test that races
-// ahead of the park exercises the non-blocking path instead of the one it
+// ahead of the park exercises the non-blocking path instead of the thing it
 // means to. These are the same counters the wakeup protocol itself reads.
 func waitForWaiters(t *testing.T, q *Queue, recv, send int32) {
 	t.Helper()

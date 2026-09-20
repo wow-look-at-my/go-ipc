@@ -321,8 +321,52 @@ func (q *Queue) Abort(c Claim) {
 	}
 	defer q.leave()
 
+	// An abort frees nothing by itself: it commits a padding record that only
+	// the receiver can step over. Waking the receiver is what eventually
+	// returns the space to the senders.
 	c.Abort()
-	q.wakeSenders()
+	q.wakeReceiver()
+}
+
+// receive runs a single read and reports whether it freed ring space.
+//
+// Padding that a sender aborted frees space without producing a message, so
+// the space has to be announced even when the read delivers nothing. Without
+// that, a sender parked behind an aborted claim never wakes.
+func (q *Queue) receive(limit int, fn ReadFunc) (int, error) {
+	before := q.ring.hdr.head.Load()
+	n, err := q.ring.Read(limit, fn)
+	if q.ring.hdr.head.Load() != before {
+		q.wakeSenders()
+	}
+	if err != nil {
+		return n, err
+	}
+	if n == 0 {
+		return 0, ErrEmpty
+	}
+	return n, nil
+}
+
+// recvOne copies the next message into dst through the shared read path.
+func (q *Queue) recvOne(dst []byte) (uint32, []byte, error) {
+	var (
+		typ uint32
+		out []byte
+	)
+	_, err := q.receive(1, func(t uint32, payload []byte) {
+		typ = t
+		if cap(dst) >= len(payload) {
+			out = dst[:len(payload)]
+		} else {
+			out = make([]byte, len(payload))
+		}
+		copy(out, payload)
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	return typ, out, nil
 }
 
 // TryRecv copies the next message into dst and returns its type and payload.
@@ -335,12 +379,7 @@ func (q *Queue) TryRecv(dst []byte) (uint32, []byte, error) {
 	}
 	defer q.leave()
 
-	typ, msg, err := q.ring.TryRecv(dst)
-	if err != nil {
-		return 0, nil, err
-	}
-	q.wakeSenders()
-	return typ, msg, nil
+	return q.recvOne(dst)
 }
 
 // Recv waits for the next message and returns its type and a fresh copy of the
@@ -364,13 +403,12 @@ func (q *Queue) RecvInto(ctx context.Context, dst []byte) (uint32, []byte, error
 	)
 	err := park(ctx, q.notEmpty, &q.ring.hdr.recvWaiters, ErrEmpty, func() error {
 		var err error
-		typ, msg, err = q.ring.TryRecv(dst)
+		typ, msg, err = q.recvOne(dst)
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	q.wakeSenders()
 	return typ, msg, nil
 }
 
@@ -390,20 +428,13 @@ func (q *Queue) ReadBatch(ctx context.Context, limit int, fn ReadFunc) (int, err
 
 	var count int
 	err := park(ctx, q.notEmpty, &q.ring.hdr.recvWaiters, ErrEmpty, func() error {
-		n, err := q.ring.Read(limit, fn)
-		count = n
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return ErrEmpty
-		}
-		return nil
+		var err error
+		count, err = q.receive(limit, fn)
+		return err
 	})
 	if err != nil {
 		return count, err
 	}
-	q.wakeSenders()
 	return count, nil
 }
 
