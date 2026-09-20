@@ -17,15 +17,20 @@ import (
 // return early with no matching signal, so callers must re-check the
 // condition in a loop.
 type Event struct {
-	impl   eventImpl
-	name   string
-	owner  bool
-	tokens chan struct{}
+	impl  eventImpl
+	name  string
+	owner bool
+
+	// tokens is unbuffered on purpose: a wakeup the pump has taken but not
+	// handed on is still owned by the pump, so an early signal is held
+	// rather than dropped.
+	tokens   chan struct{}
+	closing  chan struct{}
+	pumpDone chan struct{}
 
 	pumpOnce  sync.Once
-	closing   chan struct{}
-	closeOnce sync.Once
 	shutOnce  sync.Once
+	closeOnce sync.Once
 }
 
 // shut makes closing observable exactly once, from Close or from the pump.
@@ -60,11 +65,12 @@ func OpenEvent(name string) (*Event, error) {
 
 func newEvent(impl eventImpl, name string, owner bool) *Event {
 	return &Event{
-		impl:    impl,
-		name:    name,
-		owner:   owner,
-		tokens:  make(chan struct{}),
-		closing: make(chan struct{}),
+		impl:     impl,
+		name:     name,
+		owner:    owner,
+		tokens:   make(chan struct{}),
+		closing:  make(chan struct{}),
+		pumpDone: make(chan struct{}),
 	}
 }
 
@@ -111,12 +117,11 @@ func (e *Event) Wait(ctx context.Context) error {
 	}
 }
 
-// pump moves wakeups from the operating system handle onto e.tokens.
-//
-// The handoff is unbuffered on purpose. A token the pump has taken but not
-// handed on is still owned by the pump, so a signal that arrives before its
-// waiter does is held rather than dropped.
+// pump moves wakeups off the operating system handle and onto e.tokens. One
+// pump serves every waiter in this process, so a kernel wait that does block a
+// thread blocks at most one per event.
 func (e *Event) pump() {
+	defer close(e.pumpDone)
 	for {
 		if err := e.impl.wait(); err != nil {
 			e.shut()
@@ -136,7 +141,14 @@ func (e *Event) Close() error {
 	var err error
 	e.closeOnce.Do(func() {
 		e.shut()
-		err = e.impl.close()
+		err = e.impl.stop()
+		// Claiming pumpOnce stops a pump that has not started yet, so the
+		// wait below cannot outlast a Close that raced a first Wait.
+		e.pumpOnce.Do(func() { close(e.pumpDone) })
+		<-e.pumpDone
+		if rerr := e.impl.release(); err == nil {
+			err = rerr
+		}
 	})
 	return err
 }
