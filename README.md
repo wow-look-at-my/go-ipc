@@ -94,6 +94,19 @@ Nothing spins, by design. A spin in user space burns a whole timeslice whenever 
 
 The test suite holds this package to that claim. `TestBlockedEndpointsConsumeNoCPU` measures the processor time of a process whose endpoints are all parked. `TestParkedWaitersHoldNoThreads` counts the OS threads that parked waiters occupy.
 
+`latency_test.go` carries the baselines to read a round trip against, because a parked round trip cannot beat the kernel underneath it. From one run on the development machine:
+
+```
+RingClaimCommit/256      54 ns/op   0 allocs/op   # no system call at all
+QueueThroughput/256     868 ns/op   1 allocs/op   # batched, parks when drained
+GoChannelPingPong       476 ns/op   0 allocs/op   # goroutine handoff floor
+PipePingPong           3177 ns/op   0 allocs/op   # kernel round-trip floor
+EventPingPong          4306 ns/op   4 allocs/op   # the wake primitive alone
+QueuePingPong          4715 ns/op   4 allocs/op   # parks on every message
+```
+
+The ring is the fast path and costs no system call. Everything above a microsecond is the wakeup, and a wakeup happens whenever a side finds nothing to do. A consumer that outruns its producer therefore parks on almost every message, and pays for it. `ReadBatch` is the answer when a burst exists, because it amortizes one wakeup over the whole batch.
+
 ## Platforms
 
 Linux, macOS and Windows. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows.

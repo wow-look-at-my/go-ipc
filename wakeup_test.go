@@ -8,15 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEventPumpDoesNotStealForeignWakeups covers a liveness hazard specific to
-// a wake handle that processes share.
+// TestEventDoesNotStealForeignWakeups covers a liveness hazard specific to a
+// wake handle that processes share.
 //
-// Every process that ever waited on an event keeps a reader on the handle. A
-// reader that consumes a token with nobody waiting behind it strands the
+// A process that consumes a token with nobody waiting behind it strands the
 // waiter in the other process, which then sleeps with no further signal due.
-// The reader here is driven by local demand, so it takes nothing while this
-// side has no waiter.
-func TestEventPumpDoesNotStealForeignWakeups(t *testing.T) {
+// Only a waiter reads here, so an idle process takes nothing.
+func TestEventDoesNotStealForeignWakeups(t *testing.T) {
 	name := uniqueName(t)
 
 	thief, err := CreateEvent(name)
@@ -33,8 +31,8 @@ func TestEventPumpDoesNotStealForeignWakeups(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Start the thief's reader the only way a caller can: by waiting a single
-	// time and being released. Its reader now lives for the rest of the process.
+	// Give the thief a live reader handle the only way a caller can: wait
+	// once and be released. The handle stays open in its pool afterwards.
 	require.NoError(t, thief.Signal())
 	require.NoError(t, thief.Wait(ctx))
 
@@ -53,7 +51,7 @@ func TestEventPumpDoesNotStealForeignWakeups(t *testing.T) {
 	case err := <-result:
 		require.NoError(t, err)
 	case <-ctx.Done():
-		t.Fatal("the waiter never woke: an idle reader took its wakeup")
+		t.Fatal("the waiter never woke: an idle process took its wakeup")
 	}
 }
 
