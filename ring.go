@@ -50,9 +50,7 @@ type ringHeader struct {
 	capacity uint64
 	// consumer is the procID of the process that reads the ring.
 	consumer atomic.Uint64
-	// See procNS.
-	consumerNS atomic.Uint64
-	_          [cacheLine - 40]byte
+	_        [cacheLine - 32]byte
 
 	// tail is the producer cursor. Producers claim by advancing it.
 	tail atomic.Uint64
@@ -77,11 +75,10 @@ type ringHeader struct {
 // claim in progress from a claim its producer died holding.
 type claimSlot struct {
 	owner atomic.Uint64
-	ns    atomic.Uint64
 	// at and size are the cursor range the owner claims, or is about to.
 	at   atomic.Uint64
 	size atomic.Uint64
-	_    [slotSize - 32]byte
+	_    [slotSize - 24]byte
 }
 
 // A wrong size here would put a cursor on the wrong cache line and silently
@@ -111,12 +108,12 @@ func RingSize(capacity int) int {
 // Every byte of buf is overwritten. InitRing has a single caller, and every
 // other participant calls AttachRing.
 func InitRing(buf []byte) (*Ring, error) {
-	return initRing(buf, noProc, 0)
+	return initRing(buf, noProc)
 }
 
 // initRing is InitRing with the consumer recorded before the ring becomes
 // visible, so a peer that attaches never sees a ring without its reader.
-func initRing(buf []byte, consumer procID, ns uint64) (*Ring, error) {
+func initRing(buf []byte, consumer procID) (*Ring, error) {
 	if len(buf) < HeaderSize+MinCapacity {
 		return nil, ErrTooSmall
 	}
@@ -130,7 +127,6 @@ func initRing(buf []byte, consumer procID, ns uint64) (*Ring, error) {
 	hdr.capacity = capacity
 	hdr.version = ringVersion
 	hdr.consumer.Store(uint64(consumer))
-	hdr.consumerNS.Store(ns)
 	for idx := range hdr.slots {
 		hdr.slots[idx].at.Store(noIntent)
 	}

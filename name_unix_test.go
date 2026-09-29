@@ -32,3 +32,17 @@ func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 	_, err = os.Stat(eventPath(instanceName(name, inc) + ".ne"))
 	assert.ErrorIs(t, err, fs.ErrNotExist)
 }
+
+func TestSweepRemovesLifeSocketOfDeadProcess(t *testing.T) {
+	live, liveID, _ := startIdent(t)
+	dead := deadProcID(t)
+	_, err := os.Stat(lifePath(dead))
+	require.NoError(t, err, "a process leaves its life socket behind")
+
+	sweepDir(lifeDir())
+	_, err = os.Stat(lifePath(dead))
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+	_, err = os.Stat(lifePath(liveID))
+	assert.NoError(t, err, "the sweep removed the life socket of a live process")
+	kill(t, live)
+}
