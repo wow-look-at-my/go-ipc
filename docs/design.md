@@ -7,26 +7,41 @@ This document covers the memory layout, the record format and the wakeup protoco
 A `Queue` is a shared memory segment that holds a `Ring`, plus a pair of `Event` handles. The ring moves the bytes. The events move a goroutine between the run state and the parked state.
 
 ```
-Queue "jobs"
-  /dev/shm/go-shm-jobs            segment: [ ring header 512B | data 2^n B ]
-  /dev/shm/go-ipc-jobs.ne.event   FIFO: the receiver parks here
-  /dev/shm/go-ipc-jobs.nf.event   FIFO: the senders park here
+Queue "jobs", instance 1f0c...
+  /dev/shm/go-ipc-jobs.name                 name file: the flock and the instance id
+  /dev/shm/go-shm-jobs.1f0c...              segment: [ ring header 16.5K | data 2^n B ]
+  /dev/shm/go-ipc-jobs.1f0c....ne.event     FIFO: the receiver parks here
+  /dev/shm/go-ipc-jobs.1f0c....nf.event     FIFO: the senders park here
 ```
 
 A `Channel` is a pair of queues with opposite directions. A `Conn` adds stream framing to a channel.
 
+## Names and instances
+
+A queue name points at an instance. The instance id is random hex digits. It is part of the name of the segment and of both events.
+
+`CreateQueue` takes an exclusive lock on the name file, and holds it for the life of the queue. On Unix that is a `flock`. On Windows the creator opens the file with no write sharing and with delete-on-close. The kernel drops either lock when the creator exits. A second creator therefore gets `ErrInUse` while the first one lives, and gets the name when it does not.
+
+The creator then removes the instance the name file names, if any, and builds a new one. It writes the new id into the name file last. An opener reads the id, then opens the instance. So an opener never sees a half-built instance. A stale instance is never reused, because its senders may still hold it.
+
+A process killed before `Unlink` leaves its instance behind. On Linux that is memory in `/dev/shm`. The first `CreateQueue` or `CreateChannel` in each process sweeps the runtime directory. It removes every name file that no live process holds, with the instance it names. Windows needs no sweep: every object dies with its last handle.
+
+The sweep takes each lock for a moment. A creator that races it on a stale name can get `ErrInUse`, and succeeds when it tries again.
+
 ## Ring layout
 
-The control block is 512 bytes. That is four cache lines of 128 bytes each. Each cursor that a different party writes gets a line of its own.
+The control block is a run of cache lines, then the table of claim slots. `HeaderSize` is its size. Each cursor that a different party writes gets a line of its own.
 
 Put a pair of such cursors on one line and every producer claim invalidates the consumer's line. The reverse also happens. That false sharing costs more than the work either side does. A build-time assertion fails if the struct size drifts.
 
 | offset | field | written by |
 | --- | --- | --- |
 | 0 | magic, version, capacity | the creator, once |
+| 24 | `consumer`, the procID of the reader | the creator, the channel peer, a close |
 | 128 | `tail` | producers, by compare-and-swap |
 | 256 | `head` | the consumer |
 | 384 | `headCache`, `recvWaiters`, `sendWaiters` | both sides |
+| 512 | claim slots: `owner`, `at`, `size` | the producer that owns the slot |
 
 A cursor is 64 bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
 
@@ -52,7 +67,7 @@ A record is a header of 8 bytes and then its payload. The next record starts at 
 
 A producer writes `-len`, then the payload, then `+len`. The store of `+len` and the consumer's load of it are sequentially consistent. That is what makes the payload visible. The consumer stops at any record whose length is not positive. A record in flight therefore blocks the reader. The reader never sees a partial payload.
 
-The consumer zeroes each header before it advances `head`. No producer can claim that space until `head` moves. The zero is therefore guaranteed to land before anything reuses the slot. That zero is what makes the next lap's "nobody claimed it" state true.
+The consumer zeroes every byte it consumes before it advances `head`, not just the header. Records start at different offsets on each lap, so any 8-byte word of a payload can be a header on the next lap. A producer claims its range before it writes the header. If the old payload bytes stayed, a reader can take them for a committed record in that gap. No producer can claim the space until `head` moves, so the zeros always land first.
 
 ## Wrapping
 
@@ -67,6 +82,38 @@ A claim that crosses the end is handled in one step. The producer claims the rem
 A producer claims by compare-and-swap on `tail`. A failed swap means that another producer claimed first. The retry is therefore bounded by real progress somewhere. This is a lock-free retry, not a wait. No producer blocks on another producer that the scheduler stopped in the middle of a claim.
 
 There is exactly one consumer. It needs no atomic operation to find the next record beyond the acquire load of the length. It advances `head` with a single store.
+
+Only the handle `CreateQueue` returns may receive. Any other handle gets `ErrNotConsumer`. The receiving handle runs its receives one at a time, so concurrent calls to `Recv` share the queue safely.
+
+## Claim slots and dead producers
+
+A producer that dies between its claim and its commit leaves a record the reader cannot pass. Each queue claim therefore names its producer.
+
+A process takes a claim slot for each claim it has open, from a pool it keeps. Before the compare-and-swap on `tail`, the producer writes the range it is about to claim into its slot: `at` is the cursor, `size` is the claim. It clears `at` after the commit. The slot's `owner` is the procID of the process.
+
+A reader that stops at a record that is not committed looks for the slots whose range covers its cursor. The true producer is always among them. A live producer's intent stays in place from before its compare-and-swap until after its commit. The reader saw `tail` move, so it also sees that intent.
+
+- A live owner means a claim in progress. The reader watches that process for its exit and parks.
+- A dead owner means a claim nobody will commit. The reader writes padding over the range, with a compare-and-swap on the length, and reads on. A claim that crossed the wrap point is reclaimed one lap segment at a time.
+- Dead owners that claim different ranges at the cursor leave no way to tell which claim is real. The reader returns `ErrCorrupt`. For that, more than one producer must die at the same instant, on the same cursor.
+
+A `procID` is the pid in its high half and the low half of the start time in its low half. The start time tells a reused pid from the process that held it before. It comes from `/proc/<pid>/stat` on Linux, from `sysctl kern.proc.pid` on macOS, and from `GetProcessTimes` on Windows. A zombie counts as dead.
+
+A process that runs out of free slots takes the slot of a dead owner, once that owner's claim no longer stops the reader. When live claims hold all `ClaimSlots` slots, a claim fails with `ErrTooManyClaims`. A slot is held only while a claim is open. So only a caller that keeps that many `Claim` values open, or that many senders inside the copy at once, reaches the limit.
+
+`Ring.TryClaim` on a raw ring makes an unattributed claim. The reader cannot recover one, and waits for it forever.
+
+## Peers
+
+The `consumer` field holds the procID of the process that reads the queue. A sender checks it on every operation.
+
+- `0` means the reader closed. The sender gets `ErrPeerGone`.
+- A procID gets a watch on that process, the first time the sender sees it. The watch is a kernel wait: a pidfd on Linux, a kqueue `NOTE_EXIT` filter on macOS, a process handle on Windows. Both Unix waits go through the Go poller and hold no thread. When the process exits, the watch marks the peer gone and wakes every sender this process has parked on the queue.
+- The value `1` means a channel direction whose peer has not connected. Sends go through and wait in the ring.
+
+The watch starts only after it checks the start time again, since the pid can have passed to another process in between. A process that is already dead is reported at once.
+
+A channel's peer is the reader of its outbound queue. `OpenChannel` connects by a compare-and-swap of that field from `1` to its own procID. A second peer gets `ErrInUse`. The receive side of a channel checks the peer before each read, and reports `ErrPeerGone` only after the read finds nothing. A peer that sent a message and then exited has its message delivered first.
 
 ## The wakeup protocol
 
@@ -115,7 +162,7 @@ On Windows an event is a named semaphore. A waiter calls `WaitForMultipleObjects
 
 ## Closing
 
-Every queue operation registers against the mapping before it touches shared memory. `Close` sets a closing flag. It closes both events, which releases whatever parked on them. It waits for the in-flight count to reach zero. Only then does it unmap the segment.
+Every queue operation registers against the mapping before it touches shared memory. `Close` sets a closing flag. The receiving handle then clears `consumer` and wakes the parked senders, which find `ErrPeerGone`. `Close` cancels its watches. It closes both events, which releases whatever parked on them. It waits for the in-flight count to reach zero. It returns its claim slots and unmaps the segment. Last, it releases the name.
 
 Without that guard, a `Close` on one goroutine pulls the mapping out from under a `Send` parked on another. The process then faults on the next atomic. The ordering argument is the one the wakeup protocol uses. The closing flag and the in-flight counter are both sequentially consistent. An operation therefore either backs out or gets waited for.
 
@@ -123,8 +170,10 @@ A claim is the exception that the API cannot police. It points into the mapping.
 
 ## Failure modes
 
-A producer can die between the claim of a record and the commit of it. That leaves a negative length in the ring. The consumer stops there, because it cannot tell that case from a producer still at work. The negative marker makes the cases distinguishable to a diagnostic tool, even though the reader cannot separate them.
+A producer that dies holding a claim is covered in "Claim slots and dead producers". A reader or a channel peer that dies is covered in "Peers".
 
-A corrupt length makes `Read` return `ErrCorrupt` rather than a slice out of bounds. A length is corrupt when it runs past the committed cursor, or when it is too small to hold a header.
+A corrupt length makes `Read` return `ErrCorrupt` rather than a slice out of bounds. A length is corrupt when it runs past the committed cursor, runs past the end of the data region, or is too small to hold a header.
 
-A peer that never opens the queue is not detected. These primitives carry no liveness signal. That is a deliberate limit. A queue is a data structure, not a connection.
+A plain queue has no peer. Its receiver waits for new senders for as long as it runs. A context is the way to bound that wait.
+
+A sender that dies while it is parked leaves `sendWaiters` one too high. The reader then makes a signal call that nobody needs each time it frees space. That costs time and loses nothing. It lasts until the queue is replaced.
