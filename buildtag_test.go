@@ -19,6 +19,7 @@ func TestCosmoFilesCarryTheirTag(t *testing.T) {
 	for _, file := range files {
 		src, err := os.ReadFile(file)
 		require.NoError(t, err)
-		assert.True(t, strings.HasPrefix(string(src), "//go:build cosmo\n"), "%s has no //go:build cosmo line", file)
+		first, _, _ := strings.Cut(string(src), "\n")
+		assert.Equal(t, "//go:build cosmo", strings.TrimSuffix(first, "\r"), "%s has no //go:build cosmo line", file)
 	}
 }
