@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: wow-look-at-my/go-shm
+          ref: claude/fervent-shannon-dsjk5k
           path: deps/go-shm
       - uses: actions/checkout@v4
         with:
