@@ -22,6 +22,12 @@ func listenLife(id procID) (net.Listener, error) {
 		return nil, err
 	}
 	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	// Only the owner may connect, as with every other file of this package.
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		ln.Close()
+		os.Remove(tmp)
+		return nil, err
+	}
 	if err := os.Rename(tmp, path); err != nil {
 		ln.Close()
 		os.Remove(tmp)
