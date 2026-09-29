@@ -118,7 +118,7 @@ The ring is the fast path and costs no system call. Everything above a microseco
 
 ## Platforms
 
-Linux, macOS and Windows, and CI runs the full suite on all three. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows. Exit detection uses a Unix socket per process, on all three.
+Linux, macOS and Windows, and CI runs the full suite on all three. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows. Exit detection uses a Unix socket per process, on all three. Windows has no sweep, so those sockets stay in the temporary directory after their processes exit.
 
 ## Documentation
 
