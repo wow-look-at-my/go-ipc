@@ -4,12 +4,25 @@ on:
     branches: ['probe/**']
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: wow-look-at-my/go-shm
+          path: deps/go-shm
+      - uses: actions/checkout@v4
+        with:
+          repository: wow-look-at-my/go-mmap
+          path: deps/go-mmap
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go get github.com/wow-look-at-my/go-shm@master github.com/wow-look-at-my/go-mmap@master
+      - run: go mod edit -replace github.com/wow-look-at-my/go-shm=./deps/go-shm -replace github.com/wow-look-at-my/go-mmap=./deps/go-mmap
+      - run: go mod tidy
       - run: go test -count=1 -timeout 15m -v ./...
