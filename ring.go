@@ -77,7 +77,7 @@ type ringHeader struct {
 // claim in progress from a claim its producer died holding.
 type claimSlot struct {
 	owner atomic.Uint64
-	ns atomic.Uint64
+	ns    atomic.Uint64
 	// at and size are the cursor range the owner claims, or is about to.
 	at   atomic.Uint64
 	size atomic.Uint64
