@@ -5,7 +5,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
