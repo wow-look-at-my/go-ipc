@@ -101,6 +101,8 @@ A `procID` is the pid in its high half and the low half of the start time in its
 
 A pid names a process only inside its own pid namespace, and containers can share `/dev/shm` across namespaces. Each slot and the `consumer` field therefore also record the owner's pid namespace. On Linux that is the inode of `/proc/self/ns/pid`. A process judges only owners in its own namespace. A claim from another namespace is left alone, and a producer there that dies holding one wedges the reader. A receiver in another namespace gets no exit watch, so its senders learn of a `Close` but not of a crash.
 
+A `GOOS=cosmo` binary builds the Linux code, and one binary runs on Linux, macOS and Windows. On a Linux host it uses procfs and pidfd. On any other host it has no identity a peer can check, and takes the unknown namespace. It then judges no peer and no peer judges it. Its queues work, but without recovery from a dead peer.
+
 A process that runs out of free slots takes the slot of a dead owner, once that owner's claim no longer stops the reader. When live claims hold all `ClaimSlots` slots, a claim fails with `ErrTooManyClaims`. A slot is held only while a claim is open. So only a caller that keeps that many `Claim` values open, or that many senders inside the copy at once, reaches the limit.
 
 `Ring.TryClaim` on a raw ring makes an unattributed claim. The reader cannot recover one, and waits for it forever.
