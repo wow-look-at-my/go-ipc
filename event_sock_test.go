@@ -4,6 +4,7 @@ package ipc
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,12 +13,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// sockEventsEnv switches the socket backend on in a child process too.
+const sockEventsEnv = "GO_IPC_TEST_SOCK_EVENTS"
+
+func init() {
+	if os.Getenv(sockEventsEnv) == "1" {
+		sockHost = func() bool { return true }
+	}
+}
+
 // The socket backend runs only on a Windows host in production. These tests
 // switch it on here, so every host exercises it.
 func useSockEvents(t *testing.T) {
+	t.Setenv(sockEventsEnv, "1")
 	old := sockHost
 	sockHost = func() bool { return true }
 	t.Cleanup(func() { sockHost = old })
+}
+
+func TestSockEventSendReportsDeadReceiver(t *testing.T) {
+	useSockEvents(t)
+	sendReportsDeadReceiver(t)
 }
 
 func TestSockEventSignalBeforeWait(t *testing.T) {

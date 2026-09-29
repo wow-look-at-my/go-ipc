@@ -368,7 +368,7 @@ func (q *Queue) SendTyped(ctx context.Context, typ uint32, payload []byte) error
 		return q.write(typ, payload)
 	})
 	if err != nil {
-		return err
+		return q.sawPeerGone(err)
 	}
 	q.wakeReceiver()
 	return nil
@@ -392,7 +392,7 @@ func (q *Queue) Claim(ctx context.Context, typ uint32, length int) (Claim, error
 		return err
 	})
 	if err != nil {
-		return Claim{}, err
+		return Claim{}, q.sawPeerGone(err)
 	}
 	return c, nil
 }

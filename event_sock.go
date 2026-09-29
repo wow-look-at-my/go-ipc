@@ -29,6 +29,8 @@ type sockServer struct {
 	mu      sync.Mutex
 	tokens  int
 	waiting []net.Conn
+	clients map[net.Conn]struct{}
+	closed  bool
 }
 
 func sockPath(name string) string {
@@ -43,19 +45,23 @@ func createSockEvent(name string) (*sockEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	srv := &sockServer{ln: ln}
+	srv := &sockServer{ln: ln, clients: make(map[net.Conn]struct{})}
 	go srv.serve()
 	return &sockEvent{path: path, srv: srv, conns: make(map[net.Conn]struct{})}, nil
 }
 
-// openSockEvent dials once, so a name with no live creator fails here rather than at the first wait.
+// openSockEvent fails for a name that was never created. A refused dial means
+// the creator died: the open succeeds, as it does for a FIFO the creator left.
+// A stat cannot tell these apart, because a stat of a socket fails on Windows.
 func openSockEvent(name string) (*sockEvent, error) {
 	path := sockPath(name)
 	conn, err := net.Dial("unix", path)
-	if err != nil {
+	if err != nil && !isRefused(err) {
 		return nil, err
 	}
-	conn.Close()
+	if conn != nil {
+		conn.Close()
+	}
 	return &sockEvent{path: path, conns: make(map[net.Conn]struct{})}, nil
 }
 
@@ -65,8 +71,29 @@ func (s *sockServer) serve() {
 		if err != nil {
 			return
 		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			conn.Close()
+			continue
+		}
+		s.clients[conn] = struct{}{}
+		s.mu.Unlock()
 		go s.client(conn)
 	}
+}
+
+// shutdown hangs up every client, so a waiter in another process learns that the creator closed.
+func (s *sockServer) shutdown() {
+	s.ln.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	for conn := range s.clients {
+		conn.Close()
+	}
+	s.clients = nil
+	s.waiting = nil
 }
 
 func (s *sockServer) client(conn net.Conn) {
@@ -117,6 +144,7 @@ func (s *sockServer) remove(conn net.Conn) bool {
 func (s *sockServer) drop(conn net.Conn) {
 	s.mu.Lock()
 	s.remove(conn)
+	delete(s.clients, conn)
 	s.mu.Unlock()
 }
 
@@ -141,8 +169,12 @@ func (e *sockEvent) hangUp(conn net.Conn) {
 	conn.Close()
 }
 
+// signal to a dead creator is dropped. Nobody waits on it, as with a FIFO nobody reads.
 func (e *sockEvent) signal(n int) error {
 	conn, err := e.dial()
+	if isRefused(err) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -157,25 +189,39 @@ func (e *sockEvent) signal(n int) error {
 	return nil
 }
 
+// wait reports ErrPeerGone when the creator dies, because nobody can signal the event after that.
 func (e *sockEvent) wait(ctx context.Context) error {
 	conn, err := e.dial()
+	if isRefused(err) {
+		return ErrPeerGone
+	}
 	if err != nil {
 		return err
 	}
 	defer e.hangUp(conn)
 	if _, err := conn.Write([]byte{'W'}); err != nil {
-		return ErrClosed
+		return e.lost()
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Write([]byte{'C'}) })
 	defer stop()
 	var reply [1]byte
 	if _, err := io.ReadFull(conn, reply[:]); err != nil {
-		return ErrClosed
+		return e.lost()
 	}
 	if reply[0] == 'T' {
 		return nil
 	}
 	return ctx.Err()
+}
+
+// lost names a broken connection. A local close broke it, or the creator went away.
+func (e *sockEvent) lost() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return ErrClosed
+	}
+	return ErrPeerGone
 }
 
 func (e *sockEvent) close() error {
@@ -190,7 +236,7 @@ func (e *sockEvent) close() error {
 	}
 	e.mu.Unlock()
 	if e.srv != nil {
-		e.srv.ln.Close()
+		e.srv.shutdown()
 		os.Remove(e.path)
 	}
 	return nil

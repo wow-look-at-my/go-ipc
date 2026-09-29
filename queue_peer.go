@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -82,6 +83,15 @@ func (q *Queue) watchPeer(id procID) error {
 	}
 	w.cancel = cancel
 	return nil
+}
+
+// sawPeerGone records a wait that reported the receiver gone. The watch reports
+// the same exit, but it can arrive after the next send.
+func (q *Queue) sawPeerGone(err error) error {
+	if errors.Is(err, ErrPeerGone) {
+		q.peer.gone.Store(true)
+	}
+	return err
 }
 
 // peerExited marks the receiver gone and wakes everything in this process

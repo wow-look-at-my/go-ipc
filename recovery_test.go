@@ -218,7 +218,9 @@ func TestClaimSlotsRunOut(t *testing.T) {
 	assert.Equal(t, "after", string(msg))
 }
 
-func TestSendReportsDeadReceiver(t *testing.T) {
+func TestSendReportsDeadReceiver(t *testing.T) { sendReportsDeadReceiver(t) }
+
+func sendReportsDeadReceiver(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)
 
@@ -237,12 +239,11 @@ func TestSendReportsDeadReceiver(t *testing.T) {
 	assert.ErrorIs(t, <-sent, ErrPeerGone)
 	assert.ErrorIs(t, q.TrySend(payload), ErrPeerGone)
 
-	// Windows deletes the name with its holder. Unix keeps it until a sweep or a new creator replaces it.
 	_, err = OpenQueue(name)
-	if runtime.GOOS == "windows" {
-		assert.ErrorIs(t, err, fs.ErrNotExist)
-	} else {
+	if nameOutlivesHolder {
 		assert.ErrorIs(t, err, ErrPeerGone)
+	} else {
+		assert.ErrorIs(t, err, fs.ErrNotExist)
 	}
 }
 

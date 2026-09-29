@@ -11,6 +11,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// nameOutlivesHolder is false: delete-on-close removes the name with its holder.
+const nameOutlivesHolder = false
+
 func namePath(name string) string {
 	return filepath.Join(os.TempDir(), "go-ipc-"+name+".name")
 }

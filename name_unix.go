@@ -20,6 +20,9 @@ const (
 	nameSuffix = ".name"
 )
 
+// nameOutlivesHolder is true: the name stays until a sweep or a new creator replaces it.
+const nameOutlivesHolder = true
+
 func namePath(name string) string {
 	return filepath.Join(runtimeDir(), namePrefix+name+nameSuffix)
 }
