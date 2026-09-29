@@ -118,7 +118,7 @@ The ring is the fast path and costs no system call. Everything above a microseco
 
 ## Platforms
 
-Linux, macOS and Windows, and CI runs the full suite on all three. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows. Exit detection needs Linux 5.3 or later for `pidfd_open`. A `GOOS=cosmo` binary detects peer death only on a Linux host.
+Linux, macOS and Windows, and CI runs the full suite on all three. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows. Exit detection uses a Unix socket per process, on all three.
 
 ## Documentation
 

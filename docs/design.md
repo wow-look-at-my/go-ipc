@@ -37,7 +37,7 @@ Put a pair of such cursors on one line and every producer claim invalidates the 
 | offset | field | written by |
 | --- | --- | --- |
 | 0 | magic, version, capacity | the creator, once |
-| 24 | `consumer`, the procID of the reader, and its pid namespace | the creator, the channel peer, a close |
+| 24 | `consumer`, the procID of the reader | the creator, the channel peer, a close |
 | 128 | `tail` | producers, by compare-and-swap |
 | 256 | `head` | the consumer |
 | 384 | `headCache`, `recvWaiters`, `sendWaiters` | both sides |
@@ -97,11 +97,20 @@ A reader that stops at a record that is not committed looks for the slots whose 
 - A dead owner means a claim nobody will commit. The reader writes padding over the range, with a compare-and-swap on the length, and reads on. A claim that crossed the wrap point is reclaimed one lap segment at a time.
 - Dead owners that claim different ranges at the cursor leave no way to tell which claim is real. The reader returns `ErrCorrupt`. For that, more than one producer must die at the same instant, on the same cursor.
 
-A `procID` is the pid in its high half and the low half of the start time in its low half. The start time tells a reused pid from the process that held it before. It comes from `/proc/<pid>/stat` on Linux, from `sysctl kern.proc.pid` on macOS, and from `GetProcessTimes` on Windows. A zombie counts as dead.
+## Process identity: the life socket
 
-A pid names a process only inside its own pid namespace, and containers can share `/dev/shm` across namespaces. Each slot and the `consumer` field therefore also record the owner's pid namespace. On Linux that is the inode of `/proc/self/ns/pid`. A process judges only owners in its own namespace. A claim from another namespace is left alone, and a producer there that dies holding one wedges the reader. A receiver in another namespace gets no exit watch, so its senders learn of a `Close` but not of a crash.
+A `procID` is a random 64-bit value, so no later process reuses it. Its top bit says that a life socket stands behind it.
 
-A `GOOS=cosmo` binary builds the Linux code, and one binary runs on Linux, macOS and Windows. On a Linux host it uses procfs and pidfd. On any other host it has no identity a peer can check, and takes the unknown namespace. It then judges no peer and no peer judges it. Its queues work, but without recovery from a dead peer.
+The first use of the package in a process listens on a Unix socket in the runtime directory, named after the procID. The process never writes to a connection there. The kernel closes every connection to it when the process exits, however it exits. So:
+
+- A watch on a process is a connection to its life socket. A read on it ends when the process exits, and it parks in the Go poller until then.
+- A check of a process is a dial. A refused dial, or a missing socket, means the process is gone.
+
+Pids, start times and pid namespaces play no part. A container that shares the runtime directory reaches the socket, whatever pid namespace it runs in. The same code runs on Linux, macOS and Windows, and in a `GOOS=cosmo` binary on each of them.
+
+On Unix the socket is bound under a temporary name and renamed into place. A bound socket refuses a dial until it listens, and the sweep removes a socket that refuses, but never one with a temporary name. The sweep removes the life sockets of processes that are gone, along with stale queue names. Windows has no sweep. As a result, a life socket stays in the temporary directory after its process exits.
+
+A host that cannot listen on a Unix socket gives the process a procID without the top bit. Its queues work. No peer judges its liveness, and it judges no peer that lacks the bit either. Its death is not detected.
 
 A process that runs out of free slots takes the slot of a dead owner, once that owner's claim no longer stops the reader. When live claims hold all `ClaimSlots` slots, a claim fails with `ErrTooManyClaims`. A slot is held only while a claim is open. So only a caller that keeps that many `Claim` values open, or that many senders inside the copy at once, reaches the limit.
 
@@ -112,10 +121,10 @@ A process that runs out of free slots takes the slot of a dead owner, once that 
 The `consumer` field holds the procID of the process that reads the queue. A sender checks it on every operation.
 
 - `0` means the reader closed. The sender gets `ErrPeerGone`.
-- A procID gets a watch on that process, the first time the sender sees it. The watch is a kernel wait: a pidfd on Linux, a kqueue `NOTE_EXIT` filter on macOS, a process handle on Windows. Both Unix waits go through the Go poller and hold no thread. When the process exits, the watch marks the peer gone and wakes every sender this process has parked on the queue.
+- A procID gets a watch on that process, the first time the sender sees it: a connection to its life socket. When the process exits, the watch marks the peer gone and wakes every sender this process has parked on the queue.
 - The value `1` means a channel direction whose peer has not connected. Sends go through and wait in the ring.
 
-The watch starts only after it checks the start time again, since the pid can have passed to another process in between. A process that is already dead is reported at once.
+A process that is already dead is reported at once.
 
 A channel's peer is the reader of its outbound queue. `OpenChannel` connects by a compare-and-swap of that field from `1` to its own procID. A second peer gets `ErrInUse`. The receive side of a channel checks the peer before each read, and reports `ErrPeerGone` only after the read finds nothing. A peer that sent a message and then exited has its message delivered first.
 
