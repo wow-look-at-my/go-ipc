@@ -52,7 +52,7 @@ err = q.Send(ctx, []byte("work item"))
 - On a `Channel` or `Conn`, the other side gets every message the dead peer sent, then `ErrPeerGone`.
 - `CreateQueue` returns `ErrInUse` while a live process holds the name. It replaces an instance whose creator died, and the first create in a process sweeps what crashed processes left behind.
 
-Death is detected by a kernel wait on the process, never by a poll or a timeout. See [docs/design.md](docs/design.md).
+Death is detected through a socket the kernel closes when the process exits, never by a poll or a timeout. See [docs/design.md](docs/design.md).
 
 ## Streams
 
