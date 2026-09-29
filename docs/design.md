@@ -174,6 +174,10 @@ An earlier design put a reader goroutine per event in front of the waiters and h
 
 On Windows an event is a named semaphore. A waiter calls `WaitForMultipleObjects` over that semaphore, a shared close handle, and a cancel handle of its own. This wait does occupy a thread for its duration, which the Unix poller avoids. The Go runtime hands the processor to another thread meanwhile, so other goroutines keep running.
 
+A cosmo binary on a Windows host has no FIFOs, because `mkfifo` fails there. Its events use a Unix socket instead (`event_sock.go`). The creator listens on the socket and keeps the token count. A waiter connects and sends a wait request. The creator answers with a token when one is free. A signal connects and adds tokens. A cancelled waiter sends a cancel. The creator answers it only while the waiter is still queued, so no token is lost. The socket name is a hash of the event path, because a socket path must fit in `sun_path`.
+
+When the creator exits or closes, every waiter connection breaks. The wait then reports `ErrPeerGone`, because nobody can signal the event after that. A signal to a dead creator is dropped, the same as a write to a FIFO that nobody reads. An open checks the path with `Lstat`. A dial cannot tell a dead creator from a missing path, because Windows refuses both. `Lstat` fails with `ENOENT` only when the path is gone.
+
 ## Closing
 
 Every queue operation registers against the mapping before it touches shared memory. `Close` sets a closing flag. The receiving handle then clears `consumer` and wakes the parked senders, which find `ErrPeerGone`. `Close` cancels its watches. It closes both events, which releases whatever parked on them. It waits for the in-flight count to reach zero. It returns its claim slots and unmaps the segment. Last, it releases the name.
