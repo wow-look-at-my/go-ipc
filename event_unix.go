@@ -86,7 +86,11 @@ func createEventImpl(name string) (*eventImpl, error) {
 
 func openEventImpl(name string) (*eventImpl, error) {
 	if sockHost() {
-		return &eventImpl{sock: openSockEvent(name)}, nil
+		sock, err := openSockEvent(name)
+		if err != nil {
+			return nil, err
+		}
+		return &eventImpl{sock: sock}, nil
 	}
 	return newEventImpl(eventPath(name))
 }

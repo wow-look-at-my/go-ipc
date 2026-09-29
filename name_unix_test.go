@@ -5,6 +5,7 @@ package ipc
 import (
 	"io/fs"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,13 +37,22 @@ func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 func TestSweepRemovesLifeSocketOfDeadProcess(t *testing.T) {
 	live, liveID, _ := startIdent(t)
 	dead := deadProcID(t)
-	_, err := os.Stat(lifePath(dead))
-	require.NoError(t, err, "a process leaves its life socket behind")
+	require.True(t, listed(t, lifePath(dead)), "a process leaves its life socket behind")
 
 	sweepDir(lifeDir())
-	_, err = os.Stat(lifePath(dead))
-	assert.ErrorIs(t, err, fs.ErrNotExist)
-	_, err = os.Stat(lifePath(liveID))
-	assert.NoError(t, err, "the sweep removed the life socket of a live process")
+	assert.False(t, listed(t, lifePath(dead)))
+	assert.True(t, listed(t, lifePath(liveID)), "the sweep removed the life socket of a live process")
 	kill(t, live)
+}
+
+// listed reads the directory, because a stat of a socket fails with EIO on a Windows host.
+func listed(t *testing.T, path string) bool {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.Name() == filepath.Base(path) {
+			return true
+		}
+	}
+	return false
 }

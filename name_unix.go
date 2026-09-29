@@ -24,10 +24,17 @@ func namePath(name string) string {
 	return filepath.Join(runtimeDir(), namePrefix+name+nameSuffix)
 }
 
+// incPath holds the incarnation. It is a separate file from the lock, because
+// a flock on a Windows host is mandatory and would stop a reader.
+func incPath(name string) string {
+	return filepath.Join(runtimeDir(), namePrefix+name+".inc")
+}
+
 // A nameLock holds a name. The creator keeps it for the life of the queue,
 // and the kernel drops the flock when the creator exits.
 type nameLock struct {
-	f *os.File
+	name string
+	f    *os.File
 }
 
 // lockName takes the name, or fails with ErrInUse while a live process
@@ -50,7 +57,7 @@ func lockName(name string) (*nameLock, error) {
 		held, herr := f.Stat()
 		now, nerr := os.Stat(path)
 		if herr == nil && nerr == nil && os.SameFile(held, now) {
-			return &nameLock{f: f}, nil
+			return &nameLock{name: name, f: f}, nil
 		}
 		f.Close()
 	}
@@ -58,28 +65,32 @@ func lockName(name string) (*nameLock, error) {
 
 // previous returns the instance the name named before this lock took it.
 func (l *nameLock) previous() string {
-	buf := make([]byte, incarnationLen+1)
-	n, _ := l.f.ReadAt(buf, 0)
-	inc, _ := parseIncarnation(buf[:n])
+	content, _ := os.ReadFile(incPath(l.name))
+	inc, _ := parseIncarnation(content)
 	return inc
 }
 
 func (l *nameLock) publish(inc string) error {
-	if _, err := l.f.WriteAt([]byte(inc), 0); err != nil {
+	f, err := os.OpenFile(incPath(l.name), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
 		return err
 	}
-	return l.f.Truncate(int64(len(inc)))
+	defer f.Close()
+	if _, err := f.WriteAt([]byte(inc), 0); err != nil {
+		return err
+	}
+	return f.Truncate(int64(len(inc)))
 }
 
 func (l *nameLock) release() error { return l.f.Close() }
 
 // readName returns the instance a name points at.
 func readName(name string) (string, error) {
-	content, err := os.ReadFile(namePath(name))
-	if errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(namePath(name)); errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("ipc: no endpoint named %q: %w", name, fs.ErrNotExist)
 	}
-	if err != nil {
+	content, err := os.ReadFile(incPath(name))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", err
 	}
 	inc, ok := parseIncarnation(content)
@@ -92,8 +103,7 @@ func readName(name string) (string, error) {
 // unlinkName removes the name file while it still points at inc. A newer
 // instance under the same name keeps its file.
 func unlinkName(name, inc string) error {
-	path := namePath(name)
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(incPath(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -103,8 +113,14 @@ func unlinkName(name, inc string) error {
 	if current, _ := parseIncarnation(content); current != inc {
 		return nil
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	return removeName(name)
+}
+
+func removeName(name string) error {
+	for _, path := range []string{incPath(name), namePath(name)} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
 }
@@ -131,7 +147,11 @@ func sweepDir(dir string) {
 		if !ok {
 			continue
 		}
-		if name, ok = strings.CutSuffix(name, nameSuffix); !ok || validateName(name) != nil {
+		base, ok := strings.CutSuffix(name, nameSuffix)
+		if !ok {
+			base, ok = strings.CutSuffix(name, ".inc")
+		}
+		if name = base; !ok || validateName(name) != nil {
 			continue
 		}
 		sweepName(name)
@@ -165,5 +185,5 @@ func sweepName(name string) {
 			return
 		}
 	}
-	os.Remove(namePath(name))
+	removeName(name)
 }

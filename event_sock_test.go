@@ -35,6 +35,12 @@ func TestSockEventSignalBeforeWait(t *testing.T) {
 	require.NoError(t, creator.Wait(testContext(t)))
 }
 
+func TestSockEventOpenRejectsMissingName(t *testing.T) {
+	useSockEvents(t)
+	_, err := OpenEvent(uniqueName(t))
+	assert.Error(t, err)
+}
+
 func TestSockEventLongName(t *testing.T) {
 	useSockEvents(t)
 	name := uniqueName(t) + strings.Repeat("x", 150)

@@ -48,8 +48,15 @@ func createSockEvent(name string) (*sockEvent, error) {
 	return &sockEvent{path: path, srv: srv, conns: make(map[net.Conn]struct{})}, nil
 }
 
-func openSockEvent(name string) *sockEvent {
-	return &sockEvent{path: sockPath(name), conns: make(map[net.Conn]struct{})}
+// openSockEvent dials once, so a name with no live creator fails here rather than at the first wait.
+func openSockEvent(name string) (*sockEvent, error) {
+	path := sockPath(name)
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	conn.Close()
+	return &sockEvent{path: path, conns: make(map[net.Conn]struct{})}, nil
 }
 
 func (s *sockServer) serve() {
