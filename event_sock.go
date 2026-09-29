@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -50,17 +52,13 @@ func createSockEvent(name string) (*sockEvent, error) {
 	return &sockEvent{path: path, srv: srv, conns: make(map[net.Conn]struct{})}, nil
 }
 
-// openSockEvent fails for a name that was never created. A refused dial means
-// the creator died: the open succeeds, as it does for a FIFO the creator left.
-// A stat cannot tell these apart, because a stat of a socket fails on Windows.
+// openSockEvent fails only for a missing path. A socket whose creator died
+// opens, as a FIFO the creator left does. Windows refuses a dial to a missing
+// path too, so a dial cannot tell both apart.
 func openSockEvent(name string) (*sockEvent, error) {
 	path := sockPath(name)
-	conn, err := net.Dial("unix", path)
-	if err != nil && !isRefused(err) {
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil, err
-	}
-	if conn != nil {
-		conn.Close()
 	}
 	return &sockEvent{path: path, conns: make(map[net.Conn]struct{})}, nil
 }
