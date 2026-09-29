@@ -4,6 +4,7 @@ package ipc
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,17 @@ func TestSockEventSignalBeforeWait(t *testing.T) {
 	defer opener.Close()
 
 	require.NoError(t, opener.Signal())
+	require.NoError(t, creator.Wait(testContext(t)))
+}
+
+func TestSockEventLongName(t *testing.T) {
+	useSockEvents(t)
+	name := uniqueName(t) + strings.Repeat("x", 150)
+	creator, err := CreateEvent(name)
+	require.NoError(t, err)
+	defer creator.Unlink()
+	defer creator.Close()
+	require.NoError(t, creator.Signal())
 	require.NoError(t, creator.Wait(testContext(t)))
 }
 

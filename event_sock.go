@@ -4,9 +4,12 @@ package ipc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -28,7 +31,10 @@ type sockServer struct {
 	waiting []net.Conn
 }
 
-func sockPath(name string) string { return eventPath(name) + ".sock" }
+func sockPath(name string) string {
+	sum := sha256.Sum256([]byte(eventPath(name)))
+	return filepath.Join(filepath.Dir(eventPath(name)), "go-ipc-"+hex.EncodeToString(sum[:8])+".esock")
+}
 
 func createSockEvent(name string) (*sockEvent, error) {
 	path := sockPath(name)
