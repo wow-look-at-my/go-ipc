@@ -75,7 +75,7 @@ func (r *Ring) acquireSlot(self procID, ns uint64, dead func(procID) bool) (int,
 		if at := slot.at.Load(); at != noIntent && at+slot.size.Load() > head {
 			continue
 		}
-		if slot.ns.Load() != ns || !dead(owner) {
+		if !sameNS(slot.ns.Load(), ns) || !dead(owner) {
 			continue
 		}
 		if slot.owner.CompareAndSwap(uint64(owner), uint64(self)) {
