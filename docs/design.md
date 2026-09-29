@@ -23,7 +23,7 @@ A queue name points at an instance. The instance id is random hex digits. It is 
 
 `CreateQueue` takes an exclusive lock on the name file, and holds it for the life of the queue. On Unix that is a `flock`. On Windows the creator opens the file with no write sharing and with delete-on-close. The kernel drops either lock when the creator exits. A second creator therefore gets `ErrInUse` while the first one lives, and gets the name when it does not.
 
-The creator then removes the instance the name names, if any, and builds a new one. It writes the new id into the `.inc` file last. The id is not in the locked file. On a Windows host a cosmo `flock` is a mandatory lock, and a reader gets `EACCES`. An opener reads the id, then opens the instance. So an opener never sees a half-built instance. A stale instance is never reused, because its senders may still hold it.
+The creator then removes the instance the name names, if any, and builds a new one. It writes the new id into the `.inc` file last. The id is not in the locked file. On a Windows host a cosmo `flock` is a mandatory lock. A reader of the locked file gets `EACCES`. An opener reads the id, then opens the instance. So an opener never sees a half-built instance. A stale instance is never reused, because its senders may still hold it.
 
 A process killed before `Unlink` leaves its instance behind. On Linux that is memory in `/dev/shm`. The first `CreateQueue` or `CreateChannel` in each process sweeps the runtime directory. It removes every name file that no live process holds, with the instance it names. Windows needs no sweep: every object dies with its last handle.
 
