@@ -63,9 +63,13 @@ func (q *Queue) watchPeer(id procID) error {
 		w.cancel()
 		w.cancel = nil
 	}
-	w.gone.Store(false)
 	w.failed.Store(nil)
+	// A receiver that is already dead is reported now. The watch would report it too, but only after this call returns.
+	w.gone.Store(isDead(id))
 	w.id.Store(uint64(id))
+	if w.gone.Load() {
+		return ErrPeerGone
+	}
 	cancel, err := onExit(id, func(err error) { q.peerExited(id, err) })
 	if err != nil {
 		w.id.Store(0)

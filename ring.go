@@ -226,7 +226,7 @@ type Claim struct {
 	r     *Ring
 	index uint64
 	total int32
-	slot int
+	slot  int
 
 	// Bytes is the payload region. Writes to it become visible to the reader on Commit.
 	Bytes []byte
