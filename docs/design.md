@@ -37,11 +37,11 @@ Put a pair of such cursors on one line and every producer claim invalidates the 
 | offset | field | written by |
 | --- | --- | --- |
 | 0 | magic, version, capacity | the creator, once |
-| 24 | `consumer`, the procID of the reader | the creator, the channel peer, a close |
+| 24 | `consumer`, the procID of the reader, and its pid namespace | the creator, the channel peer, a close |
 | 128 | `tail` | producers, by compare-and-swap |
 | 256 | `head` | the consumer |
 | 384 | `headCache`, `recvWaiters`, `sendWaiters` | both sides |
-| 512 | claim slots: `owner`, `at`, `size` | the producer that owns the slot |
+| 512 | claim slots: `owner`, `ns`, `at`, `size` | the producer that owns the slot |
 
 A cursor is 64 bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
 
@@ -98,6 +98,8 @@ A reader that stops at a record that is not committed looks for the slots whose 
 - Dead owners that claim different ranges at the cursor leave no way to tell which claim is real. The reader returns `ErrCorrupt`. For that, more than one producer must die at the same instant, on the same cursor.
 
 A `procID` is the pid in its high half and the low half of the start time in its low half. The start time tells a reused pid from the process that held it before. It comes from `/proc/<pid>/stat` on Linux, from `sysctl kern.proc.pid` on macOS, and from `GetProcessTimes` on Windows. A zombie counts as dead.
+
+A pid names a process only inside its own pid namespace, and containers can share `/dev/shm` across namespaces. Each slot and the `consumer` field therefore also record the owner's pid namespace. On Linux that is the inode of `/proc/self/ns/pid`. A process judges only owners in its own namespace. A claim from another namespace is left alone, and a producer there that dies holding one wedges the reader. A receiver in another namespace gets no exit watch, so its senders learn of a `Close` but not of a crash.
 
 A process that runs out of free slots takes the slot of a dead owner, once that owner's claim no longer stops the reader. When live claims hold all `ClaimSlots` slots, a claim fails with `ErrTooManyClaims`. A slot is held only while a claim is open. So only a caller that keeps that many `Claim` values open, or that many senders inside the copy at once, reaches the limit.
 
