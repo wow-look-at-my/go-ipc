@@ -30,11 +30,14 @@ func (id procID) matches(start uint64) bool { return uint32(start) == uint32(id)
 var self struct {
 	once sync.Once
 	id   procID
+	ns   uint64
 	err  error
 }
 
-// selfID returns the procID of this process.
-func selfID() (procID, error) {
+// selfID returns the procID of this process, and its pid namespace.
+//
+// A pid names a process only inside its own pid namespace. Queues can join processes in different namespaces that share /dev/shm. A process judges the liveness of another only when the other is in its own namespace.
+func selfID() (procID, uint64, error) {
 	self.once.Do(func() {
 		pid := os.Getpid()
 		start, err := startTime(pid)
@@ -42,9 +45,13 @@ func selfID() (procID, error) {
 			self.err = err
 			return
 		}
+		if self.ns, err = procNS(); err != nil {
+			self.err = err
+			return
+		}
 		self.id = makeProcID(pid, start)
 	})
-	return self.id, self.err
+	return self.id, self.ns, self.err
 }
 
 // isDead reports whether the process id names has exited.

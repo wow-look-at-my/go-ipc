@@ -25,16 +25,12 @@ func CreateChannel(name string, opts ...Option) (*Channel, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
-	self, err := selfID()
-	if err != nil {
-		return nil, err
-	}
 	// The direction to the peer has no reader until a peer connects.
-	tx, err := createQueue(name+chanCreatorToOpener, opts, pendingProc)
+	tx, err := createQueue(name+chanCreatorToOpener, opts, true)
 	if err != nil {
 		return nil, err
 	}
-	rx, err := createQueue(name+chanOpenerToCreator, opts, self)
+	rx, err := createQueue(name+chanOpenerToCreator, opts, false)
 	if err != nil {
 		tx.Close()
 		tx.Unlink()
@@ -65,6 +61,7 @@ func OpenChannel(name string, opts ...Option) (*Channel, error) {
 		tx.Close()
 		return nil, fmt.Errorf("ipc: open channel %q: %w", name, ErrInUse)
 	}
+	rx.ring.hdr.consumerNS.Store(rx.ns)
 	rx.reader = true
 	ch := newChannel(name, tx, rx, false)
 	// The creator may already be parked. It wakes to find its peer, and to start watching the peer's process.

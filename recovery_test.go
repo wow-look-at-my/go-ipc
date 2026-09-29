@@ -42,6 +42,7 @@ func strandClaim(t *testing.T, q *Queue, owner procID, slot int, size uint64, he
 	hdr := q.ring.hdr
 	tail := hdr.tail.Load()
 	hdr.slots[slot].owner.Store(uint64(owner))
+	hdr.slots[slot].ns.Store(q.ns)
 	hdr.slots[slot].size.Store(size)
 	hdr.slots[slot].at.Store(tail)
 	hdr.tail.Store(tail + size)
@@ -140,6 +141,7 @@ func TestDeadProducersThatDisagreeAreCorrupt(t *testing.T) {
 	strandClaim(t, q, dead, 1, 16, false)
 	// A second dead producer claims to own a longer range at the same spot.
 	q.ring.hdr.slots[2].owner.Store(uint64(dead))
+	q.ring.hdr.slots[2].ns.Store(q.ns)
 	q.ring.hdr.slots[2].size.Store(32)
 	q.ring.hdr.slots[2].at.Store(q.ring.hdr.slots[1].at.Load())
 
@@ -152,11 +154,49 @@ func TestSlotsOfDeadProducersAreReused(t *testing.T) {
 	dead := deadProcID(t)
 	for idx := range q.ring.hdr.slots {
 		q.ring.hdr.slots[idx].owner.Store(uint64(dead))
+		q.ring.hdr.slots[idx].ns.Store(q.ns)
 	}
 	require.NoError(t, q.TrySend([]byte("reused")))
 	_, msg, err := q.TryRecv(nil)
 	require.NoError(t, err)
 	assert.Equal(t, "reused", string(msg))
+}
+
+// A pid from another pid namespace names some other process here, so its
+// claims and its slots are never judged.
+func TestOtherNamespaceIsNeverJudged(t *testing.T) {
+	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	dead := deadProcID(t)
+	strandClaim(t, q, dead, 1, 16, false)
+	q.ring.hdr.slots[1].ns.Store(q.ns + 1)
+	for idx := 2; idx < ClaimSlots; idx++ {
+		q.ring.hdr.slots[idx].owner.Store(uint64(dead))
+		q.ring.hdr.slots[idx].ns.Store(q.ns + 1)
+	}
+
+	_, _, err := q.TryRecv(nil)
+	assert.ErrorIs(t, err, ErrEmpty)
+	assert.Equal(t, uint64(dead), q.ring.hdr.slots[1].owner.Load())
+
+	ctx := testContext(t)
+	held, err := q.Claim(ctx, 0, 0)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(q.self), q.ring.hdr.slots[0].owner.Load())
+	_, err = q.Claim(ctx, 0, 0)
+	assert.ErrorIs(t, err, ErrTooManyClaims)
+	q.Abort(held)
+}
+
+func TestReceiverInOtherNamespaceIsNotWatched(t *testing.T) {
+	name := uniqueName(t)
+	q := newReceiver(t, name)
+	sender, err := OpenQueue(name)
+	require.NoError(t, err)
+	defer sender.Close()
+
+	q.ring.hdr.consumer.Store(uint64(deadProcID(t)))
+	q.ring.hdr.consumerNS.Store(q.ns + 1)
+	assert.NoError(t, sender.TrySend([]byte("x")))
 }
 
 func TestClaimSlotsRunOut(t *testing.T) {
@@ -511,8 +551,9 @@ func TestOnExitCancelStopsTheCall(t *testing.T) {
 }
 
 func TestSelfIsAlive(t *testing.T) {
-	id, err := selfID()
+	id, ns, err := selfID()
 	require.NoError(t, err)
+	assert.NotZero(t, ns)
 	assert.False(t, isDead(id))
 	assert.Equal(t, os.Getpid(), id.pid())
 }

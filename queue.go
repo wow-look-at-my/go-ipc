@@ -50,6 +50,7 @@ type Queue struct {
 	notFull  *Event
 	cfg      config
 	self     procID
+	ns       uint64
 	// lock holds the name. Only the creator has one.
 	lock *nameLock
 	// reader reports whether this handle owns the receiving end.
@@ -102,15 +103,12 @@ func (q *Queue) leave() {
 // returns ErrInUse while a live process holds the name. An instance whose
 // holder is gone is replaced.
 func CreateQueue(name string, opts ...Option) (*Queue, error) {
-	self, err := selfID()
-	if err != nil {
-		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
-	}
-	return createQueue(name, opts, self)
+	return createQueue(name, opts, false)
 }
 
-// createQueue makes a new instance of the named queue with the given reader.
-func createQueue(name string, opts []Option, reader procID) (*Queue, error) {
+// createQueue makes a new instance of the named queue. This process reads
+// it, unless pending leaves the reader to a channel peer that connects later.
+func createQueue(name string, opts []Option, pending bool) (*Queue, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
@@ -118,7 +116,7 @@ func createQueue(name string, opts []Option, reader procID) (*Queue, error) {
 	if err := cfg.apply(opts); err != nil {
 		return nil, err
 	}
-	self, err := selfID()
+	self, ns, err := selfID()
 	if err != nil {
 		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
 	}
@@ -128,23 +126,27 @@ func createQueue(name string, opts []Option, reader procID) (*Queue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
 	}
-	q := newQueue(name, cfg, self)
+	q := newQueue(name, cfg, self, ns)
 	q.lock = lock
-	q.reader = reader == self
-	if err := q.build(reader); err != nil {
+	reader, readerNS := self, ns
+	if pending {
+		reader, readerNS = pendingProc, 0
+	}
+	q.reader = !pending
+	if err := q.build(reader, readerNS); err != nil {
 		q.unwind()
 		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
 	}
 	return q, nil
 }
 
-func newQueue(name string, cfg config, self procID) *Queue {
-	return &Queue{name: name, cfg: cfg, self: self, drained: make(chan struct{}, 1)}
+func newQueue(name string, cfg config, self procID, ns uint64) *Queue {
+	return &Queue{name: name, cfg: cfg, self: self, ns: ns, drained: make(chan struct{}, 1)}
 }
 
 // build makes the instance while this handle holds the name. The name file
 // points at the instance only after the instance is complete.
-func (q *Queue) build(reader procID) error {
+func (q *Queue) build(reader procID, readerNS uint64) error {
 	if old := q.lock.previous(); old != "" {
 		if err := removeInstance(q.name, old); err != nil {
 			return err
@@ -164,7 +166,7 @@ func (q *Queue) build(reader procID) error {
 	if q.seg, err = shm.Create(inst, RingSize(q.cfg.capacity)); err != nil {
 		return err
 	}
-	if q.ring, err = initRing(q.seg.Data(), reader); err != nil {
+	if q.ring, err = initRing(q.seg.Data(), reader, readerNS); err != nil {
 		return err
 	}
 	return q.lock.publish(q.inc)
@@ -193,11 +195,11 @@ func openQueue(name string, opts []Option) (*Queue, error) {
 	if err := cfg.apply(opts); err != nil {
 		return nil, err
 	}
-	self, err := selfID()
+	self, ns, err := selfID()
 	if err != nil {
 		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
 	}
-	q := newQueue(name, cfg, self)
+	q := newQueue(name, cfg, self, ns)
 	if q.inc, err = readName(name); err != nil {
 		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
 	}

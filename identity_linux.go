@@ -33,6 +33,15 @@ func startTime(pid int) (uint64, error) {
 	return strconv.ParseUint(string(fields[19]), 10, 64)
 }
 
+// procNS returns the inode of this process's pid namespace.
+func procNS() (uint64, error) {
+	var st unix.Stat_t
+	if err := unix.Stat("/proc/self/ns/pid", &st); err != nil {
+		return 0, fmt.Errorf("ipc: pid namespace: %w", err)
+	}
+	return st.Ino, nil
+}
+
 // openExit returns a pidfd for the process id names. The kernel makes a
 // pidfd readable when its process exits.
 func openExit(id procID) (exitWaiter, error) {

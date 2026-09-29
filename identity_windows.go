@@ -41,6 +41,8 @@ func startTime(pid int) (uint64, error) {
 	return start, nil
 }
 
+func procNS() (uint64, error) { return 1, nil }
+
 // handleWaiter waits on a process handle. The wait holds a thread, as every
 // Windows wait in this package does.
 type handleWaiter struct {

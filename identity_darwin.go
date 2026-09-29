@@ -3,6 +3,7 @@ package ipc
 import (
 	"errors"
 	"fmt"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -11,21 +12,35 @@ import (
 const sZOMB = 5
 
 // startTime reads the start time of pid from the kernel, in microseconds.
+// The kernel answers an empty record for a pid with no process, and only
+// that counts as gone.
 func startTime(pid int) (uint64, error) {
-	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
-	if errors.Is(err, unix.ESRCH) || errors.Is(err, unix.EIO) {
-		// The kernel answers an empty record for a pid with no process, which x/sys reports as EIO.
+	raw, err := unix.SysctlRaw("kern.proc.pid", pid)
+	if errors.Is(err, unix.ESRCH) {
 		return 0, errProcGone
 	}
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("ipc: sysctl kern.proc.pid %d: %w", pid, err)
 	}
-	if int(kp.Proc.P_pid) != pid || kp.Proc.P_stat == sZOMB {
+	if len(raw) == 0 {
 		return 0, errProcGone
 	}
-	tv := kp.Proc.P_starttime
+	var proc unix.ExternProc
+	if len(raw) < int(unsafe.Sizeof(proc)) {
+		return 0, fmt.Errorf("ipc: sysctl kern.proc.pid %d: short record of %d bytes", pid, len(raw))
+	}
+	proc = *(*unix.ExternProc)(unsafe.Pointer(&raw[0]))
+	if int(proc.P_pid) != pid {
+		return 0, fmt.Errorf("ipc: sysctl kern.proc.pid %d: record names pid %d", pid, proc.P_pid)
+	}
+	if proc.P_stat == sZOMB {
+		return 0, errProcGone
+	}
+	tv := proc.P_starttime
 	return uint64(tv.Sec)*1_000_000 + uint64(tv.Usec), nil
 }
+
+func procNS() (uint64, error) { return 1, nil }
 
 // openExit returns a kqueue that holds a NOTE_EXIT filter for the process
 // id names. The kqueue becomes readable when that process exits.

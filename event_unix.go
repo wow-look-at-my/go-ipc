@@ -82,11 +82,16 @@ func newEventImpl(path string) (*eventImpl, error) {
 	return &eventImpl{path: path, write: w}, nil
 }
 
+// openFIFO opens the FIFO nonblocking and hands the descriptor to os.NewFile.
+// os.OpenFile keeps a FIFO away from the poller on darwin, so a wait there
+// would hold a thread. A descriptor that is nonblocking already goes to the
+// poller on every platform.
 func openFIFO(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
+	f := os.NewFile(uintptr(fd), path)
 	// A pollable handle is the whole point, so prove it rather than assume
 	// it. Deadline support is the observable consequence of registration
 	// with the runtime poller.

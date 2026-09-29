@@ -41,10 +41,12 @@ func (r *Ring) reclaim(st stall, end uint64, dead []int) bool {
 	if toEnd := uint64(r.Capacity()) - index; size > toEnd {
 		size = toEnd
 	}
-	r.storeType(index, TypePadding)
+	// Only the reader reads a header, and the reader is this goroutine, so the
+	// type can follow the length.
 	if !r.casLength(index, st.length, int32(size)) {
 		return false
 	}
+	r.storeType(index, TypePadding)
 	if st.at+size == end {
 		for _, idx := range dead {
 			r.hdr.slots[idx].at.Store(noIntent)
@@ -55,9 +57,10 @@ func (r *Ring) reclaim(st stall, end uint64, dead []int) bool {
 
 // acquireSlot takes a claim slot for self. It prefers a free slot. Otherwise
 // it takes a slot whose owner is dead and whose claim stops the reader.
-func (r *Ring) acquireSlot(self procID, dead func(procID) bool) (int, error) {
+func (r *Ring) acquireSlot(self procID, ns uint64, dead func(procID) bool) (int, error) {
 	for idx := range r.hdr.slots {
 		if r.hdr.slots[idx].owner.CompareAndSwap(0, uint64(self)) {
+			r.hdr.slots[idx].ns.Store(ns)
 			r.hdr.slots[idx].at.Store(noIntent)
 			return idx, nil
 		}
@@ -72,10 +75,11 @@ func (r *Ring) acquireSlot(self procID, dead func(procID) bool) (int, error) {
 		if at := slot.at.Load(); at != noIntent && at+slot.size.Load() > head {
 			continue
 		}
-		if !dead(owner) {
+		if slot.ns.Load() != ns || !dead(owner) {
 			continue
 		}
 		if slot.owner.CompareAndSwap(uint64(owner), uint64(self)) {
+			slot.ns.Store(ns)
 			slot.at.Store(noIntent)
 			return idx, nil
 		}

@@ -46,6 +46,11 @@ func (q *Queue) checkPeer() error {
 	case pendingProc, q.self:
 		return nil
 	}
+	// A receiver in another pid namespace cannot be watched from here. Its
+	// Close still reaches this sender through the consumer field.
+	if q.ring.hdr.consumerNS.Load() != q.ns {
+		return nil
+	}
 	if procID(q.peer.id.Load()) == id {
 		return q.peer.state()
 	}
@@ -178,7 +183,9 @@ func (q *Queue) unstall() (bool, error) {
 		if owner == noProc || at == noIntent || at > st.at || st.at >= at+size {
 			continue
 		}
-		if owner == q.self {
+		// A claim of this process, or of a process in another pid namespace, is
+		// left alone.
+		if owner == q.self || slot.ns.Load() != q.ns {
 			return false, nil
 		}
 		if !isDead(owner) {
@@ -211,7 +218,7 @@ func (q *Queue) takeSlot() (int, error) {
 	q.slotMu.Unlock()
 
 	known := make(map[procID]bool)
-	slot, err := q.ring.acquireSlot(q.self, func(id procID) bool {
+	slot, err := q.ring.acquireSlot(q.self, q.ns, func(id procID) bool {
 		dead, ok := known[id]
 		if !ok {
 			dead = isDead(id)
