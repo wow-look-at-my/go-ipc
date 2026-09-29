@@ -56,11 +56,10 @@ func (r *Ring) reclaim(st stall, end uint64, dead []int) bool {
 }
 
 // acquireSlot takes a claim slot for self. It prefers a free slot. Otherwise
-// it takes a slot whose owner is dead and whose claim stops the reader.
-func (r *Ring) acquireSlot(self procID, ns uint64, dead func(procID) bool) (int, error) {
+// it takes a slot whose owner is dead and whose claim the reader has passed.
+func (r *Ring) acquireSlot(self procID, dead func(procID) bool) (int, error) {
 	for idx := range r.hdr.slots {
 		if r.hdr.slots[idx].owner.CompareAndSwap(0, uint64(self)) {
-			r.hdr.slots[idx].ns.Store(ns)
 			r.hdr.slots[idx].at.Store(noIntent)
 			return idx, nil
 		}
@@ -75,11 +74,10 @@ func (r *Ring) acquireSlot(self procID, ns uint64, dead func(procID) bool) (int,
 		if at := slot.at.Load(); at != noIntent && at+slot.size.Load() > head {
 			continue
 		}
-		if !sameNS(slot.ns.Load(), ns) || !dead(owner) {
+		if !dead(owner) {
 			continue
 		}
 		if slot.owner.CompareAndSwap(uint64(owner), uint64(self)) {
-			slot.ns.Store(ns)
 			slot.at.Store(noIntent)
 			return idx, nil
 		}

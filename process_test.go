@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +60,10 @@ func runChild(role, name, count string) error {
 		return childConsumer(name)
 	case "peer":
 		return childPeer(ctx, name)
-	case "idle":
+	case "ident":
+		if _, err := fmt.Println(uint64(selfID())); err != nil {
+			return err
+		}
 		_, err := io.Copy(io.Discard, os.Stdin)
 		return err
 	default:
@@ -187,18 +191,36 @@ func kill(t *testing.T, cmd *exec.Cmd) {
 	cmd.Wait()
 }
 
+// startIdent starts a child that reports its procID and then waits. Closing
+// the returned pipe lets it exit.
+func startIdent(t *testing.T) (*exec.Cmd, procID, io.WriteCloser) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), childRoleEnv+"=ident")
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	raw, err := strconv.ParseUint(strings.TrimSpace(line), 10, 64)
+	require.NoError(t, err)
+	id := procID(raw)
+	require.True(t, id.watchable(), "the child has no life socket")
+	require.False(t, isDead(id))
+	return cmd, id, stdin
+}
+
 // deadProcID returns the procID of a process that has exited.
 func deadProcID(t *testing.T) procID {
 	t.Helper()
-	cmd := exec.Command(os.Args[0])
-	cmd.Env = append(os.Environ(), childRoleEnv+"=idle")
-	stdin, err := cmd.StdinPipe()
-	require.NoError(t, err)
-	require.NoError(t, cmd.Start())
-	start, err := startTime(cmd.Process.Pid)
-	require.NoError(t, err)
-	id := makeProcID(cmd.Process.Pid, start)
-	require.False(t, isDead(id))
+	cmd, id, stdin := startIdent(t)
 	stdin.Close()
 	require.NoError(t, cmd.Wait())
 	require.True(t, isDead(id))

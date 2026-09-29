@@ -1,81 +1,147 @@
 package ipc
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
-	"math"
-	"os"
+	"fmt"
+	"io"
+	"io/fs"
+	"net"
+	"path/filepath"
 	"sync"
 )
 
-// A procID names a single process for its whole life.
+// A procID names a single process for its whole life. It is random, so no later process reuses it.
 type procID uint64
 
 const (
 	noProc procID = 0
 	// pendingProc marks a channel direction whose reader has not connected.
 	pendingProc procID = 1
+	// watchable marks a procID with a life socket behind it.
+	watchable procID = 1 << 63
+	// anyProc keeps a random procID well away from the values above.
+	anyProc procID = 1 << 62
 )
 
-// nsUnknown is the namespace of a process that no other process can check.
-const nsUnknown = math.MaxUint64
-
-// sameNS reports whether a process in namespace b may judge the liveness of a process in namespace a.
-func sameNS(a, b uint64) bool { return a == b && a != nsUnknown }
+func (id procID) watchable() bool { return id&watchable != 0 }
 
 // errProcGone reports a process that has exited.
 var errProcGone = errors.New("ipc: process has exited")
 
-func makeProcID(pid int, start uint64) procID {
-	return procID(uint64(uint32(pid))<<32 | uint64(uint32(start)))
+// errNotWatchable reports a process that has no life socket.
+var errNotWatchable = errors.New("ipc: process cannot be watched")
+
+func lifePath(id procID) string {
+	return filepath.Join(lifeDir(), fmt.Sprintf("go-ipc-life-%016x.sock", uint64(id)))
 }
-
-func (id procID) pid() int { return int(uint32(id >> 32)) }
-
-// matches reports whether a start time belongs to the process id names.
-func (id procID) matches(start uint64) bool { return uint32(start) == uint32(id) }
 
 var self struct {
 	once sync.Once
 	id   procID
-	ns   uint64
 	err  error
 }
 
-// selfID returns the procID of this process, and its pid namespace.
+// selfID returns the procID of this process, and starts its life socket.
 //
-// A pid names a process only inside its own pid namespace. Queues can join processes in different namespaces that share /dev/shm. A process judges the liveness of another only when the other is in its own namespace.
-func selfID() (procID, uint64, error) {
+// A host that has no Unix sockets still gets a procID, without the watchable
+// bit. The queues of that process work. Its peers do not detect its death,
+// and it reports why through selfErr.
+func selfID() procID {
 	self.once.Do(func() {
-		pid := os.Getpid()
-		start, err := startTime(pid)
+		id := randomID()
+		ln, err := listenLife(id)
 		if err != nil {
-			self.err = err
+			self.id, self.err = id&^watchable, err
 			return
 		}
-		if self.ns, err = procNS(); err != nil {
-			self.err = err
-			return
-		}
-		self.id = makeProcID(pid, start)
+		self.id = id
+		go serveLife(ln)
 	})
-	return self.id, self.ns, self.err
+	return self.id
 }
 
-// isDead reports whether the process id names has exited.
-func isDead(id procID) bool {
-	start, err := startTime(id.pid())
-	if errors.Is(err, errProcGone) {
-		return true
+// selfErr is why this process has no life socket, or nil.
+func selfErr() error {
+	selfID()
+	return self.err
+}
+
+func randomID() procID {
+	var raw [8]byte
+	rand.Read(raw[:])
+	return procID(binary.LittleEndian.Uint64(raw[:])) | watchable | anyProc
+}
+
+// serveLife holds every connection to the life socket open until its peer
+// closes it, or this process exits.
+func serveLife(ln net.Listener) {
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			// Connections that wait in the backlog still end with this process, so a watch works without an accept.
+			return
+		}
+		go func() {
+			io.Copy(io.Discard, conn)
+			conn.Close()
+		}()
 	}
-	return err == nil && !id.matches(start)
 }
 
-// An exitWaiter is a kernel handle that becomes ready when a process exits.
+// isDead reports whether the process id names has exited. A process that
+// cannot be checked counts as alive. The only use of a false answer is to
+// leave its claims alone.
+func isDead(id procID) bool {
+	if !id.watchable() {
+		return false
+	}
+	conn, err := net.Dial("unix", lifePath(id))
+	if err == nil {
+		conn.Close()
+		return false
+	}
+	return lifeGone(err)
+}
+
+// lifeGone reports whether a dial error means that no process listens.
+func lifeGone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || isRefused(err)
+}
+
+// openExit connects to the life socket of id. The connection ends when that
+// process exits.
+func openExit(id procID) (exitWaiter, error) {
+	if !id.watchable() {
+		return nil, errNotWatchable
+	}
+	conn, err := net.Dial("unix", lifePath(id))
+	if err != nil {
+		if lifeGone(err) {
+			return nil, errProcGone
+		}
+		return nil, err
+	}
+	return connWaiter{conn}, nil
+}
+
+// An exitWaiter becomes ready when a process exits.
 type exitWaiter interface {
 	// wait blocks until the process exits or close is called.
 	wait() error
 	close() error
 }
+
+type connWaiter struct{ conn net.Conn }
+
+func (w connWaiter) wait() error {
+	_, err := io.Copy(io.Discard, w.conn)
+	w.conn.Close()
+	return err
+}
+
+func (w connWaiter) close() error { return w.conn.Close() }
 
 // A watch runs callbacks when its process exits. There is one per watched
 // process, however many callers watch it.

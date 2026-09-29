@@ -61,7 +61,6 @@ func OpenChannel(name string, opts ...Option) (*Channel, error) {
 		tx.Close()
 		return nil, fmt.Errorf("ipc: open channel %q: %w", name, ErrInUse)
 	}
-	rx.ring.hdr.consumerNS.Store(rx.ns)
 	rx.reader = true
 	ch := newChannel(name, tx, rx, false)
 	// The creator may already be parked. It wakes to find its peer, and to start watching the peer's process.

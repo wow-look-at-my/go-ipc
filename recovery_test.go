@@ -42,7 +42,6 @@ func strandClaim(t *testing.T, q *Queue, owner procID, slot int, size uint64, he
 	hdr := q.ring.hdr
 	tail := hdr.tail.Load()
 	hdr.slots[slot].owner.Store(uint64(owner))
-	hdr.slots[slot].ns.Store(q.ns)
 	hdr.slots[slot].size.Store(size)
 	hdr.slots[slot].at.Store(tail)
 	hdr.tail.Store(tail + size)
@@ -141,7 +140,6 @@ func TestDeadProducersThatDisagreeAreCorrupt(t *testing.T) {
 	strandClaim(t, q, dead, 1, 16, false)
 	// A second dead producer claims to own a longer range at the same spot.
 	q.ring.hdr.slots[2].owner.Store(uint64(dead))
-	q.ring.hdr.slots[2].ns.Store(q.ns)
 	q.ring.hdr.slots[2].size.Store(32)
 	q.ring.hdr.slots[2].at.Store(q.ring.hdr.slots[1].at.Load())
 
@@ -154,7 +152,6 @@ func TestSlotsOfDeadProducersAreReused(t *testing.T) {
 	dead := deadProcID(t)
 	for idx := range q.ring.hdr.slots {
 		q.ring.hdr.slots[idx].owner.Store(uint64(dead))
-		q.ring.hdr.slots[idx].ns.Store(q.ns)
 	}
 	require.NoError(t, q.TrySend([]byte("reused")))
 	_, msg, err := q.TryRecv(nil)
@@ -162,16 +159,14 @@ func TestSlotsOfDeadProducersAreReused(t *testing.T) {
 	assert.Equal(t, "reused", string(msg))
 }
 
-// A pid from another pid namespace names some other process here, so its
-// claims and its slots are never judged.
-func TestOtherNamespaceIsNeverJudged(t *testing.T) {
+// A process with no life socket cannot be checked, so its claims and its
+// slots are never judged.
+func TestUnwatchableIsNeverJudged(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
-	dead := deadProcID(t)
+	dead := deadProcID(t) &^ watchable
 	strandClaim(t, q, dead, 1, 16, false)
-	q.ring.hdr.slots[1].ns.Store(q.ns + 1)
 	for idx := 2; idx < ClaimSlots; idx++ {
 		q.ring.hdr.slots[idx].owner.Store(uint64(dead))
-		q.ring.hdr.slots[idx].ns.Store(q.ns + 1)
 	}
 
 	_, _, err := q.TryRecv(nil)
@@ -187,29 +182,18 @@ func TestOtherNamespaceIsNeverJudged(t *testing.T) {
 	q.Abort(held)
 }
 
-func TestUnknownNamespaceIsNeverJudged(t *testing.T) {
-	assert.False(t, sameNS(nsUnknown, nsUnknown))
-	assert.False(t, sameNS(1, 2))
-	assert.True(t, sameNS(7, 7))
-
-	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
-	strandClaim(t, q, deadProcID(t), 1, 16, false)
-	q.ns = nsUnknown
-	q.ring.hdr.slots[1].ns.Store(nsUnknown)
-	_, _, err := q.TryRecv(nil)
-	assert.ErrorIs(t, err, ErrEmpty)
-}
-
-func TestReceiverInOtherNamespaceIsNotWatched(t *testing.T) {
+func TestUnwatchableReceiverIsNotWatched(t *testing.T) {
 	name := uniqueName(t)
 	q := newReceiver(t, name)
 	sender, err := OpenQueue(name)
 	require.NoError(t, err)
 	defer sender.Close()
 
-	q.ring.hdr.consumer.Store(uint64(deadProcID(t)))
-	q.ring.hdr.consumerNS.Store(q.ns + 1)
+	q.ring.hdr.consumer.Store(uint64(deadProcID(t) &^ watchable))
 	assert.NoError(t, sender.TrySend([]byte("x")))
+	assert.False(t, isDead(deadProcID(t)&^watchable))
+	_, err = openExit(q.self &^ watchable)
+	assert.ErrorIs(t, err, errNotWatchable)
 }
 
 func TestClaimSlotsRunOut(t *testing.T) {
@@ -530,10 +514,7 @@ func TestConnDeadlineExtendedWhileBlocked(t *testing.T) {
 }
 
 func TestOnExitReportsChildExit(t *testing.T) {
-	cmd, stdin := startPeer(t, "consumer", uniqueName(t))
-	start, err := startTime(cmd.Process.Pid)
-	require.NoError(t, err)
-	id := makeProcID(cmd.Process.Pid, start)
+	_, id, stdin := startIdent(t)
 
 	exited := make(chan error, 1)
 	cancel, err := onExit(id, func(err error) { exited <- err })
@@ -546,17 +527,14 @@ func TestOnExitReportsChildExit(t *testing.T) {
 }
 
 func TestOnExitCancelStopsTheCall(t *testing.T) {
-	cmd, _ := startPeer(t, "consumer", uniqueName(t))
-	start, err := startTime(cmd.Process.Pid)
-	require.NoError(t, err)
-	id := makeProcID(cmd.Process.Pid, start)
+	cmd, id, _ := startIdent(t)
 
 	cancel, err := onExit(id, func(error) { t.Error("cancelled watch fired") })
 	require.NoError(t, err)
 	cancel()
 	kill(t, cmd)
 
-	// A second watch of the same process proves that the first one let go of its kernel handle.
+	// A second watch of the same process proves that the first one let go.
 	exited := make(chan error, 1)
 	_, err = onExit(id, func(err error) { exited <- err })
 	require.NoError(t, err)
@@ -564,9 +542,11 @@ func TestOnExitCancelStopsTheCall(t *testing.T) {
 }
 
 func TestSelfIsAlive(t *testing.T) {
-	id, ns, err := selfID()
-	require.NoError(t, err)
-	assert.NotZero(t, ns)
+	require.NoError(t, selfErr())
+	id := selfID()
+	assert.True(t, id.watchable())
+	assert.NotEqual(t, pendingProc, id&^watchable)
 	assert.False(t, isDead(id))
-	assert.Equal(t, os.Getpid(), id.pid())
+	_, err := os.Stat(lifePath(id))
+	assert.NoError(t, err)
 }
