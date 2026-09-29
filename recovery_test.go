@@ -3,7 +3,9 @@ package ipc
 import (
 	"context"
 	"io"
+	"io/fs"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -198,8 +200,13 @@ func TestSendReportsDeadReceiver(t *testing.T) {
 	assert.ErrorIs(t, <-sent, ErrPeerGone)
 	assert.ErrorIs(t, q.TrySend(payload), ErrPeerGone)
 
+	// Windows deletes the name with its holder. Unix keeps it until a sweep or a new creator replaces it.
 	_, err = OpenQueue(name)
-	assert.ErrorIs(t, err, ErrPeerGone)
+	if runtime.GOOS == "windows" {
+		assert.ErrorIs(t, err, fs.ErrNotExist)
+	} else {
+		assert.ErrorIs(t, err, ErrPeerGone)
+	}
 }
 
 func TestSendReportsClosedReceiver(t *testing.T) {
