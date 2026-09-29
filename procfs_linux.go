@@ -11,9 +11,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// A zombie counts as gone: it has exited, and only its parent's wait
-// keeps the entry.
-func startTime(pid int) (uint64, error) {
+// A zombie counts as gone. It has exited, and only its parent's wait keeps
+// the entry.
+func procfsStartTime(pid int) (uint64, error) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, unix.ESRCH) {
 		return 0, errProcGone
@@ -33,8 +33,8 @@ func startTime(pid int) (uint64, error) {
 	return strconv.ParseUint(string(fields[19]), 10, 64)
 }
 
-// procNS returns the inode of this process's pid namespace.
-func procNS() (uint64, error) {
+// procfsNS returns the inode of this process's pid namespace.
+func procfsNS() (uint64, error) {
 	var st unix.Stat_t
 	if err := unix.Stat("/proc/self/ns/pid", &st); err != nil {
 		return 0, fmt.Errorf("ipc: pid namespace: %w", err)
@@ -42,9 +42,9 @@ func procNS() (uint64, error) {
 	return st.Ino, nil
 }
 
-// openExit returns a pidfd for the process id names. The kernel makes a
+// procfsOpenExit returns a pidfd for the process id names. The kernel makes a
 // pidfd readable when its process exits.
-func openExit(id procID) (exitWaiter, error) {
+func procfsOpenExit(id procID) (exitWaiter, error) {
 	fd, err := unix.PidfdOpen(id.pid(), 0)
 	if errors.Is(err, unix.ESRCH) {
 		return nil, errProcGone
@@ -53,7 +53,7 @@ func openExit(id procID) (exitWaiter, error) {
 		return nil, fmt.Errorf("ipc: pidfd_open: %w", err)
 	}
 	// The pidfd pins whatever process holds the pid now.
-	start, err := startTime(id.pid())
+	start, err := procfsStartTime(id.pid())
 	if err == nil && !id.matches(start) {
 		err = errProcGone
 	}

@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"errors"
+	"math"
 	"os"
 	"sync"
 )
@@ -14,6 +15,12 @@ const (
 	// pendingProc marks a channel direction whose reader has not connected.
 	pendingProc procID = 1
 )
+
+// nsUnknown is the namespace of a process that no other process can check.
+const nsUnknown = math.MaxUint64
+
+// sameNS reports whether a process in namespace b may judge the liveness of a process in namespace a.
+func sameNS(a, b uint64) bool { return a == b && a != nsUnknown }
 
 // errProcGone reports a process that has exited.
 var errProcGone = errors.New("ipc: process has exited")

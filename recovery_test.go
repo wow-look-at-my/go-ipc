@@ -187,6 +187,19 @@ func TestOtherNamespaceIsNeverJudged(t *testing.T) {
 	q.Abort(held)
 }
 
+func TestUnknownNamespaceIsNeverJudged(t *testing.T) {
+	assert.False(t, sameNS(nsUnknown, nsUnknown))
+	assert.False(t, sameNS(1, 2))
+	assert.True(t, sameNS(7, 7))
+
+	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	strandClaim(t, q, deadProcID(t), 1, 16, false)
+	q.ns = nsUnknown
+	q.ring.hdr.slots[1].ns.Store(nsUnknown)
+	_, _, err := q.TryRecv(nil)
+	assert.ErrorIs(t, err, ErrEmpty)
+}
+
 func TestReceiverInOtherNamespaceIsNotWatched(t *testing.T) {
 	name := uniqueName(t)
 	q := newReceiver(t, name)

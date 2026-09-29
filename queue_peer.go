@@ -48,7 +48,7 @@ func (q *Queue) checkPeer() error {
 	}
 	// A receiver in another pid namespace cannot be watched from here. Its
 	// Close still reaches this sender through the consumer field.
-	if q.ring.hdr.consumerNS.Load() != q.ns {
+	if !sameNS(q.ring.hdr.consumerNS.Load(), q.ns) {
 		return nil
 	}
 	if procID(q.peer.id.Load()) == id {
@@ -185,7 +185,7 @@ func (q *Queue) unstall() (bool, error) {
 		}
 		// A claim of this process, or of a process in another pid namespace, is
 		// left alone.
-		if owner == q.self || slot.ns.Load() != q.ns {
+		if owner == q.self || !sameNS(slot.ns.Load(), q.ns) {
 			return false, nil
 		}
 		if !isDead(owner) {
