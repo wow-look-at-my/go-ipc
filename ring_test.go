@@ -59,6 +59,31 @@ func TestAttachRingSeesInitializedRing(t *testing.T) {
 	assert.Equal(t, "payload", string(msg))
 }
 
+// A claimed record whose header is not written yet must stop the reader, even
+// when the earlier lap left payload bytes there that look like a record.
+func TestReadIgnoresBytesLeftByAnEarlierLap(t *testing.T) {
+	r := newTestRing(t, MinCapacity)
+
+	fake := make([]byte, 24)
+	fake[8], fake[12] = 16, 7
+	require.NoError(t, r.TryWrite(1, fake))
+	require.NoError(t, r.TryWrite(1, make([]byte, 2024)))
+	require.NoError(t, r.TryWrite(1, make([]byte, 2024)))
+	n, err := r.Read(10, func(uint32, []byte) {})
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
+	require.Equal(t, uint64(MinCapacity), r.hdr.tail.Load())
+
+	require.NoError(t, r.TryWrite(2, make([]byte, 8)))
+	r.hdr.tail.Add(16)
+
+	var types []uint32
+	n, err = r.Read(10, func(typ uint32, _ []byte) { types = append(types, typ) })
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []uint32{2}, types)
+}
+
 func TestRingRoundTrip(t *testing.T) {
 	r := newTestRing(t, MinCapacity)
 
