@@ -23,7 +23,7 @@ func TestRingHeaderLayout(t *testing.T) {
 	r, err := InitRing(buf)
 	require.NoError(t, err)
 
-	assert.Equal(t, HeaderSize, 4*cacheLine)
+	assert.Equal(t, HeaderSize, 4*cacheLine+ClaimSlots*slotSize)
 	assert.Equal(t, MinCapacity, r.Capacity())
 	assert.True(t, r.Empty())
 	assert.Equal(t, 0, r.Buffered())

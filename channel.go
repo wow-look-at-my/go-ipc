@@ -1,12 +1,11 @@
 package ipc
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
-// A Channel is a bidirectional named endpoint between processes.
-//
-// It is a pair of queues with opposite directions, so each side sends on the
-// queue the other side receives from. The side that calls CreateChannel owns
-// the name; the side that calls OpenChannel attaches to it.
+// A Channel is a bidirectional named endpoint between a pair of processes.
 type Channel struct {
 	name  string
 	tx    *Queue
@@ -19,27 +18,35 @@ const (
 	chanOpenerToCreator = ".o2c"
 )
 
-// CreateChannel creates both directions of the named channel, replacing any
-// stale instance. The creator should Unlink the name when finished.
+// CreateChannel creates both directions of the named channel. It returns
+// ErrInUse while a live process holds the name. The creator should Unlink the
+// name when finished.
 func CreateChannel(name string, opts ...Option) (*Channel, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
-	tx, err := CreateQueue(name+chanCreatorToOpener, opts...)
+	self, err := selfID()
 	if err != nil {
 		return nil, err
 	}
-	rx, err := CreateQueue(name+chanOpenerToCreator, opts...)
+	// The direction to the peer has no reader until a peer connects.
+	tx, err := createQueue(name+chanCreatorToOpener, opts, pendingProc)
+	if err != nil {
+		return nil, err
+	}
+	rx, err := createQueue(name+chanOpenerToCreator, opts, self)
 	if err != nil {
 		tx.Close()
 		tx.Unlink()
 		return nil, err
 	}
-	return &Channel{name: name, tx: tx, rx: rx, owner: true}, nil
+	return newChannel(name, tx, rx, true), nil
 }
 
 // OpenChannel attaches to a channel the peer created. The directions are
-// swapped relative to the creator, so both sides use Send and Recv alike.
+// swapped relative to the creator, so both sides use Send and Recv alike. It
+// returns ErrPeerGone when the creator has gone, and ErrInUse when another
+// peer holds the channel.
 func OpenChannel(name string, opts ...Option) (*Channel, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
@@ -48,12 +55,30 @@ func OpenChannel(name string, opts ...Option) (*Channel, error) {
 	if err != nil {
 		return nil, err
 	}
-	rx, err := OpenQueue(name+chanCreatorToOpener, opts...)
+	rx, err := openQueue(name+chanCreatorToOpener, opts)
 	if err != nil {
 		tx.Close()
 		return nil, err
 	}
-	return &Channel{name: name, tx: tx, rx: rx}, nil
+	if !rx.ring.hdr.consumer.CompareAndSwap(uint64(pendingProc), uint64(rx.self)) {
+		rx.Close()
+		tx.Close()
+		return nil, fmt.Errorf("ipc: open channel %q: %w", name, ErrInUse)
+	}
+	rx.reader = true
+	ch := newChannel(name, tx, rx, false)
+	// The creator may already be parked. It wakes to find its peer, and to start watching the peer's process.
+	tx.notEmpty.Signal()
+	rx.wakeSenders()
+	return ch, nil
+}
+
+// newChannel links the directions. The peer is the receiver of tx, so rx
+// reports that receiver's end, and the end wakes whatever waits on rx.
+func newChannel(name string, tx, rx *Queue, owner bool) *Channel {
+	rx.peerErr = tx.checkPeer
+	tx.onPeerGone = append(tx.onPeerGone, func() { rx.notEmpty.Signal() })
+	return &Channel{name: name, tx: tx, rx: rx, owner: owner}
 }
 
 // Name returns the name the channel was created or opened with.
@@ -95,6 +120,9 @@ func (c *Channel) Claim(ctx context.Context, typ uint32, length int) (Claim, err
 // Commit publishes a claim and wakes the peer.
 func (c *Channel) Commit(cl Claim) { c.tx.Commit(cl) }
 
+// Abort discards a claim.
+func (c *Channel) Abort(cl Claim) { c.tx.Abort(cl) }
+
 // Recv waits for the next message from the peer.
 func (c *Channel) Recv(ctx context.Context) (uint32, []byte, error) {
 	return c.rx.RecvInto(ctx, nil)
@@ -116,8 +144,10 @@ func (c *Channel) ReadBatch(ctx context.Context, limit int, fn ReadFunc) (int, e
 
 // Close releases this process's handles on both directions.
 func (c *Channel) Close() error {
-	err := c.tx.Close()
-	if cerr := c.rx.Close(); err == nil {
+	// The receiving end closes first. The signal after it wakes a peer parked in Recv, which then finds this side gone.
+	err := c.rx.Close()
+	c.tx.notEmpty.Signal()
+	if cerr := c.tx.Close(); err == nil {
 		err = cerr
 	}
 	return err
