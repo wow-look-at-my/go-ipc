@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -32,6 +33,9 @@ var signalTokens = make([]byte, pipeBuf)
 // makes a read deadline usable for cancellation: a deadline set on a shared
 // handle would abort every reader of it, not just the thing that cancelled.
 type eventImpl struct {
+	// sock replaces the FIFO on a host that has none. See sockEvent.
+	sock *sockEvent
+
 	path  string
 	write *os.File
 
@@ -59,7 +63,17 @@ func newReader(f *os.File) *reader {
 	return r
 }
 
+// sockHost reports a host with no FIFOs. A unix build runs on Windows only as a cosmo binary, and mkfifo fails there.
+var sockHost = func() bool { return runtime.GOOS == "windows" }
+
 func createEventImpl(name string) (*eventImpl, error) {
+	if sockHost() {
+		sock, err := createSockEvent(name)
+		if err != nil {
+			return nil, err
+		}
+		return &eventImpl{sock: sock}, nil
+	}
 	path := eventPath(name)
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
@@ -71,6 +85,9 @@ func createEventImpl(name string) (*eventImpl, error) {
 }
 
 func openEventImpl(name string) (*eventImpl, error) {
+	if sockHost() {
+		return &eventImpl{sock: openSockEvent(name)}, nil
+	}
 	return newEventImpl(eventPath(name))
 }
 
@@ -151,6 +168,7 @@ func (e *eventImpl) releaseReader(r *reader) {
 }
 
 func unlinkEventImpl(name string) error {
+	os.Remove(sockPath(name))
 	err := os.Remove(eventPath(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -163,6 +181,9 @@ func unlinkEventImpl(name string) error {
 // A full pipe already holds more pending wakeups than there are waiters, so
 // dropping the write loses nothing.
 func (e *eventImpl) signal(n int) error {
+	if e.sock != nil {
+		return e.sock.signal(n)
+	}
 	if n > pipeBuf {
 		n = pipeBuf
 	}
@@ -199,6 +220,9 @@ var deadlinePast = time.Unix(1, 0)
 // deadline touches nothing else. A token is consumed only by a read that
 // returns it, so a cancelled wait never swallows a wakeup.
 func (e *eventImpl) wait(ctx context.Context) error {
+	if e.sock != nil {
+		return e.sock.wait(ctx)
+	}
 	r, err := e.acquire()
 	if err != nil {
 		return err
@@ -240,6 +264,9 @@ func (e *eventImpl) wait(ctx context.Context) error {
 // close releases every handle. A read in flight fails, because the Go poller
 // aborts a single on a closed file, which is what releases a parked waiter.
 func (e *eventImpl) close() error {
+	if e.sock != nil {
+		return e.sock.close()
+	}
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()

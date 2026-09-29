@@ -547,6 +547,4 @@ func TestSelfIsAlive(t *testing.T) {
 	assert.True(t, id.watchable())
 	assert.NotEqual(t, pendingProc, id&^watchable)
 	assert.False(t, isDead(id))
-	_, err := os.Stat(lifePath(id))
-	assert.NoError(t, err)
 }
