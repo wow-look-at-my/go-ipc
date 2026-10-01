@@ -9,3 +9,4 @@ Shared-memory IPC for Go, without cgo. Layers: `Ring` (lock-free MPSC records in
 - An `Event` waiter reads the FIFO on a handle of its own, from a free list. Never share a reader handle. A read deadline cancels a wait, and it aborts every reader of the handle it is set on.
 - Cross-process tests re-execute the test binary through `TestMain` in `process_test.go`. Add a role there rather than a new binary.
 - docs/design.md -- layout, record format, wakeup protocol, close ordering, failure modes.
+- `ipcgen/` is a nested Go module: the schema code generator for Go, C, C++ and Python. spec/schema.md is its contract. `codegen/` tests the generated code against spec/vectors/schema.
