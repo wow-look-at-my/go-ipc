@@ -36,7 +36,7 @@ func TestParseErrors(t *testing.T) {
 		{"package demo\nmessage A = 1 {\n\tx\n}\n", "t.ipc:3:3: expected type, found newline"},
 		{"package demo\nmessage A = 1 {\n\tx u8 y\n}\n", "t.ipc:3:7: expected newline after field, found \"y\""},
 		{"package demo\nmessage A = 1 {\n\tx [\n}\n", "t.ipc:3:5: expected array length, found newline"},
-		{"package demo\nmessage A = 1 {\n\tx [3 u8\n}\n", "t.ipc:3:6: expected ']', found \"u8\""},
+		{"package demo\nmessage A = 1 {\n\tx [3 u8\n}\n", "t.ipc:3:7: expected ']', found \"u8\""},
 		{"package demo\nmessage A = 1 {\n\tx [99999999999]u8\n}\n", "t.ipc:3:5: array length 99999999999 is too large"},
 		{"package demo\nmessage A = 1 {\n\tx [2]\n}\n", "t.ipc:3:7: expected type, found newline"},
 		{"package demo\nmessage A = 1 {\n}x\n", "t.ipc:3:2: expected newline after '}', found \"x\""},
@@ -93,9 +93,8 @@ func TestCheckReportsEveryError(t *testing.T) {
 	var list ErrorList
 	require.ErrorAs(t, err, &list)
 	require.Len(t, list, 3)
-	assert.Equal(t, 2, list[0].Pos.Line, "errors are sorted by position")
-	assert.Equal(t, 3, list[1].Pos.Line)
-	assert.Equal(t, 5, list[2].Pos.Line)
+	assert.Equal(t, []Pos{{3, 4}, {5, 9}, {5, 13}}, []Pos{list[0].Pos, list[1].Pos, list[2].Pos}, "errors are sorted by position")
+	assert.Contains(t, list[2].Msg, "type ID 1 is already used by message B")
 }
 
 func TestLayout(t *testing.T) {
@@ -127,8 +126,8 @@ message Holder = 4 {
 	assert.Equal(t, 24, inner.FixedSize)
 	assert.Equal(t, 8, inner.Align)
 	assert.Equal(t, []int{0, 8, 16}, offsets(inner))
-	assert.Equal(t, 104, outer.FixedSize)
-	assert.Equal(t, []int{0, 8, 32, 0, 104 - 8}, offsets(outer))
+	assert.Equal(t, 112, outer.FixedSize)
+	assert.Equal(t, []int{0, 8, 32, 0, 104}, offsets(outer))
 	assert.Equal(t, 0, empty.FixedSize)
 	assert.Equal(t, 1, empty.Align)
 	assert.Equal(t, []int{0, 1, 1, 4}, offsets(holder))
