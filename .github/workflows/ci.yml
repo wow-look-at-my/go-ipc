@@ -13,6 +13,7 @@ permissions:
   artifact-metadata: write
 
 jobs:
+  # The root go-toolchain run also covers interop/ and codegen/go. On Linux, `make native` builds and tests the C, C++ and Python implementations and their peers first. Those implementations are Linux only, so the other hosts run the interop matrix with the Go peer alone.
   test:
     strategy:
       fail-fast: false
@@ -20,6 +21,31 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # go-toolchain submits a dependency snapshot in CI and needs a token for it.
+      GITHUB_TOKEN: ${{ github.token }}
+      GOIPC_SPEC_DIR: ${{ github.workspace }}/spec
+      GOIPC_LIBRARY: ${{ github.workspace }}/c/build/libgoipc.so
+      GOIPC_PEER_C: ${{ github.workspace }}/c/build/goipc-peer
+      GOIPC_PEER_CPP: ${{ github.workspace }}/cpp/build/goipc-peer
+      GOIPC_PEER_PY: python3 -m goipc.peer
+      PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}/build/gen/py
+      GOIPC_INTEROP_LANGS: ${{ matrix.os == 'ubuntu-latest' && 'go,c,cpp,py' || 'go' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
+      # The C, C++ and Python generated code comes from ipcgen, so it builds first. The Go modules generate their own code with go:generate on every host.
+      - if: runner.os == 'Linux'
+        uses: wow-look-at-my/go-toolchain@master
+        with:
+          working-directory: ipcgen
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtest-dev jq
+      - if: runner.os == 'Linux'
+        run: pipx install uv
+      - if: runner.os == 'Linux'
+        run: make -C python interpreters
+      - if: runner.os == 'Linux'
+        run: make native
       - uses: wow-look-at-my/go-toolchain@master

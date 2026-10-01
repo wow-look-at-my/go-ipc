@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -32,6 +33,8 @@ type Conn struct {
 	eof     bool
 
 	writeMu sync.Mutex
+	// eofSent is set once this side has sent the end-of-stream message.
+	eofSent atomic.Bool
 
 	readDeadline  deadline
 	writeDeadline deadline
@@ -142,6 +145,9 @@ func (c *Conn) Read(p []byte) (int, error) {
 func (c *Conn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if c.eofSent.Load() {
+		return 0, net.ErrClosed
+	}
 
 	limit := c.ch.MaxMessageSize()
 	written := 0
@@ -165,14 +171,35 @@ func (c *Conn) Write(p []byte) (int, error) {
 	return written, nil
 }
 
+// CloseWrite ends this side's stream and keeps the read side open, like
+// TCPConn.CloseWrite. It waits for room to send the end-of-stream message,
+// within the write deadline. Later writes return net.ErrClosed.
+func (c *Conn) CloseWrite() error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.eofSent.Load() {
+		return net.ErrClosed
+	}
+	ctx, done, err := c.writeDeadline.begin(c.base)
+	if err != nil {
+		return err
+	}
+	err = c.translate(ctx, c.ch.SendTyped(ctx, typeStreamEOF, nil))
+	done()
+	if err != nil {
+		return err
+	}
+	c.eofSent.Store(true)
+	return nil
+}
+
 // Close tells the peer the stream ended and releases this side's handles.
-//
-// The end-of-stream message is best effort: a peer that has already gone away
-// leaves nothing to deliver it to, which is not an error here.
 func (c *Conn) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
-		c.ch.TrySendTyped(typeStreamEOF, nil)
+		if c.eofSent.CompareAndSwap(false, true) {
+			c.ch.TrySendTyped(typeStreamEOF, nil)
+		}
 		c.cancelBase()
 		err = c.ch.Close()
 	})

@@ -254,6 +254,14 @@ func (r *Ring) release(slot int) {
 	}
 }
 
+// hasRoom reports whether need bytes fit between head and tail.
+func hasRoom(tail, head, capacity, need uint64) bool {
+	if head > tail || tail-head > capacity {
+		return false
+	}
+	return capacity-(tail-head) >= need
+}
+
 // TryClaim reserves room for a payload of length bytes and returns it for the
 // caller to fill. It returns ErrFull when the ring has no room.
 func (r *Ring) TryClaim(typ uint32, length int) (Claim, error) {
@@ -293,9 +301,13 @@ func (r *Ring) tryClaim(slot int, typ uint32, length int) (Claim, error) {
 			need = aligned + toEnd
 		}
 
-		if capacity-(tail-head) < need {
+		if !hasRoom(tail, head, capacity, need) {
 			head = r.hdr.head.Load()
-			if capacity-(tail-head) < need {
+			if head > tail {
+				// Other producers moved tail and the reader followed since this load of tail, so the claim must start again.
+				continue
+			}
+			if !hasRoom(tail, head, capacity, need) {
 				r.release(slot)
 				return Claim{}, ErrFull
 			}
@@ -382,8 +394,9 @@ func (r *Ring) Read(limit int, fn ReadFunc) (int, error) {
 			fn(typ, r.data[index+RecordHeaderSize:index+uint64(length):index+uint64(length)])
 			count++
 		}
-		// Records start at different offsets on each lap, so any word here can hold a header next time.
-		clear(r.data[index : index+step])
+		// A producer advances tail before it stores its header, so a later header can land on any byte of this span.
+		clear(r.data[index+4 : index+step])
+		r.storeLength(index, 0)
 	}
 
 	if consumed > 0 {

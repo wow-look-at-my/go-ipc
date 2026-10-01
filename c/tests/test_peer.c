@@ -1,0 +1,245 @@
+/* Drives build/goipc-peer through the roles of spec/peer.md, and checks
+ * what the shared library exports. */
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include "harness.h"
+
+struct proc {
+	pid_t pid;
+	int out;
+};
+
+static struct proc spawn_fd(const char *const argv[], int target)
+{
+	int fds[2];
+	REQUIRE(pipe2(fds, O_CLOEXEC) == 0);
+	pid_t pid = fork();
+	REQUIRE(pid >= 0);
+	if (pid == 0) {
+		dup2(fds[1], target);
+		execv(GOIPC_PEER_PATH, (char *const *)argv);
+		_exit(127);
+	}
+	close(fds[1]);
+	return (struct proc){pid, fds[0]};
+}
+
+static struct proc spawn(const char *const argv[])
+{
+	return spawn_fd(argv, STDOUT_FILENO);
+}
+
+/* read_output returns what the process wrote, up to and including the first
+ * newline when line is set, or to end-of-file otherwise. */
+static void read_output(struct proc *p, char *buf, size_t cap, bool line)
+{
+	size_t have = 0;
+	while (have + 1 < cap) {
+		ssize_t n = read(p->out, buf + have, 1);
+		if (n <= 0)
+			break;
+		have++;
+		if (line && buf[have - 1] == '\n')
+			break;
+	}
+	buf[have] = '\0';
+}
+
+static int finish(struct proc *p)
+{
+	close(p->out);
+	int status;
+	REQUIRE(waitpid(p->pid, &status, 0) == p->pid);
+	return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+}
+
+TEST(peer_recv_and_send_roles, T_FORK)
+{
+	char name[96];
+	unique_name(name, sizeof name, "peerq");
+	const char *recv_args[] = {"goipc-peer", "recv", name, "3000", "4096", NULL};
+	struct proc r = spawn(recv_args);
+	char line[64];
+	read_output(&r, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+
+	struct proc s[3];
+	const char *ids[] = {"a", "b", "c"};
+	for (int i = 0; i < 3; i++) {
+		const char *send_args[] = {"goipc-peer", "send", name, ids[i], "1000", NULL};
+		s[i] = spawn(send_args);
+	}
+	for (int i = 0; i < 3; i++)
+		CHECK(finish(&s[i]) == 0, "sender %s failed", ids[i]);
+	read_output(&r, line, sizeof line, false);
+	CHECK(strcmp(line, "ok 3000\n") == 0, "recv printed %s", line);
+	REQUIRE(finish(&r) == 0, "recv failed");
+	char path[160];
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
+	CHECK(!path_exists(path), "recv left %s behind", path);
+}
+
+TEST(peer_listen_echo_and_dial_check_roles, T_FORK)
+{
+	char name[96];
+	unique_name(name, sizeof name, "peerc");
+	const char *listen_args[] = {"goipc-peer", "listen-echo", name, "4096", NULL};
+	struct proc l = spawn(listen_args);
+	char line[64];
+	read_output(&l, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+	const char *dial_args[] = {"goipc-peer", "dial-check", name, "100000", NULL};
+	struct proc d = spawn(dial_args);
+	CHECK(finish(&d) == 0, "dial-check failed");
+	CHECK(finish(&l) == 0, "listen-echo failed");
+	char path[160];
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.c2o.name", name);
+	CHECK(!path_exists(path), "listen-echo left %s behind", path);
+}
+
+TEST(peer_typed_send_and_recv_roles, T_FORK)
+{
+	REQUIRE(setenv("GOIPC_SPEC_DIR", GOIPC_SPEC_DIR, 1) == 0);
+	char name[96];
+	unique_name(name, sizeof name, "peert");
+	const char *recv_args[] = {"goipc-peer", "typed-recv", name, "4096", NULL};
+	struct proc r = spawn(recv_args);
+	char line[64];
+	read_output(&r, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+	const char *send_args[] = {"goipc-peer", "typed-send", name, NULL};
+	struct proc s = spawn(send_args);
+	CHECK(finish(&s) == 0, "typed-send failed");
+	read_output(&r, line, sizeof line, false);
+	CHECK(strncmp(line, "ok ", 3) == 0 && atoi(line + 3) > 0, "typed-recv printed %s", line);
+	REQUIRE(finish(&r) == 0, "typed-recv failed");
+	char path[160];
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
+	CHECK(!path_exists(path), "typed-recv left %s behind", path);
+}
+
+/* typed-recv must reject a record whose type is not the next entry's type ID. */
+TEST(peer_typed_recv_rejects_a_wrong_type, T_FORK)
+{
+	REQUIRE(setenv("GOIPC_SPEC_DIR", GOIPC_SPEC_DIR, 1) == 0);
+	char name[96];
+	unique_name(name, sizeof name, "peerw");
+	const char *recv_args[] = {"goipc-peer", "typed-recv", name, "4096", NULL};
+	struct proc r = spawn(recv_args);
+	char line[64];
+	read_output(&r, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+	const char *send_args[] = {"goipc-peer", "send", name, "a", "1", NULL};
+	struct proc s = spawn(send_args);
+	CHECK(finish(&s) == 0, "send failed");
+	CHECK(finish(&r) == 1, "typed-recv accepted a record of type 0");
+	char path[160];
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
+	CHECK(!path_exists(path), "typed-recv left %s behind", path);
+}
+
+static int run(const char *const argv[])
+{
+	struct proc p = spawn(argv);
+	return finish(&p);
+}
+
+/* The recover cell of spec/peer.md: dead claims, the second across the wrap point. */
+TEST(peer_recover_cell, T_FORK)
+{
+	char name[96], line[64];
+	unique_name(name, sizeof name, "peerr");
+	const char *recv_args[] = {"goipc-peer", "recv", name, "400", "4096", NULL};
+	struct proc r = spawn(recv_args);
+	read_output(&r, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+	const char *die64[] = {"goipc-peer", "claim-and-die", name, "64", NULL};
+	const char *send0[] = {"goipc-peer", "send", name, "0", "200", NULL};
+	const char *die1500[] = {"goipc-peer", "claim-and-die", name, "1500", NULL};
+	const char *send1[] = {"goipc-peer", "send", name, "1", "200", NULL};
+	CHECK(run(die64) == 0, "claim-and-die 64 failed");
+	CHECK(run(send0) == 0, "send 0 failed");
+	CHECK(run(die1500) == 0, "claim-and-die 1500 failed");
+	CHECK(run(send1) == 0, "send 1 failed");
+	read_output(&r, line, sizeof line, false);
+	CHECK(strcmp(line, "ok 400\n") == 0, "recv printed %s", line);
+	CHECK(finish(&r) == 0, "recv failed");
+}
+
+TEST(peer_receiver_gone_cell, T_FORK)
+{
+	const char *modes[] = {"close", "exit"};
+	for (int m = 0; m < 2; m++) {
+		char name[96], line[64];
+		unique_name(name, sizeof name, "peerg");
+		const char *recv_args[] = {"goipc-peer", "recv-then-stop", name, "200", "4096", modes[m], NULL};
+		struct proc r = spawn(recv_args);
+		read_output(&r, line, sizeof line, true);
+		REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+		const char *send_args[] = {"goipc-peer", "send-until-gone", name, "0", NULL};
+		struct proc s = spawn(send_args);
+		read_output(&r, line, sizeof line, false);
+		CHECK(strcmp(line, "ok 200\n") == 0, "%s: recv-then-stop printed %s", modes[m], line);
+		CHECK(finish(&r) == 0, "%s: recv-then-stop failed", modes[m]);
+		read_output(&s, line, sizeof line, false);
+		unsigned long n = 0;
+		CHECK(sscanf(line, "gone %lu", &n) == 1 && n >= 200, "%s: send-until-gone printed %s", modes[m], line);
+		CHECK(finish(&s) == 0, "%s: send-until-gone failed", modes[m]);
+	}
+}
+
+TEST(peer_channel_peer_gone_cell, T_FORK)
+{
+	const char *modes[] = {"close", "exit"};
+	for (int m = 0; m < 2; m++) {
+		char name[96], line[64];
+		unique_name(name, sizeof name, "peerh");
+		const char *recv_args[] = {"goipc-peer", "chan-recv-until-gone", name, "4096", "200", NULL};
+		struct proc r = spawn(recv_args);
+		read_output(&r, line, sizeof line, true);
+		REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+		const char *send_args[] = {"goipc-peer", "chan-send-then-stop", name, "200", modes[m], NULL};
+		CHECK(run(send_args) == 0, "%s: chan-send-then-stop failed", modes[m]);
+		read_output(&r, line, sizeof line, false);
+		CHECK(strcmp(line, "ok 200\n") == 0, "%s: chan-recv-until-gone printed %s", modes[m], line);
+		CHECK(finish(&r) == 0, "%s: chan-recv-until-gone failed", modes[m]);
+	}
+}
+
+TEST(peer_fails_on_bad_usage, T_FORK)
+{
+	const char *no_role[] = {"goipc-peer", NULL};
+	const char *unknown[] = {"goipc-peer", "fly", NULL};
+	const char *short_args[] = {"goipc-peer", "recv", "x", NULL};
+	const char *bad_number[] = {"goipc-peer", "send", "x", "a", "ten", NULL};
+	char name[96];
+	unique_name(name, sizeof name, "absent");
+	const char *missing[] = {"goipc-peer", "send", name, "a", "1", NULL};
+	const char *const *cases[] = {no_role, unknown, short_args, bad_number, missing};
+	for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		struct proc p = spawn_fd(cases[i], STDERR_FILENO);
+		char reason[256];
+		read_output(&p, reason, sizeof reason, false);
+		CHECK(strncmp(reason, "goipc-peer: ", 12) == 0, "case %zu printed %s", i, reason);
+		CHECK(finish(&p) == 1, "case %zu did not exit 1", i);
+	}
+}
+
+TEST(shared_library_exports_only_the_api, 0)
+{
+	void *h = dlopen(GOIPC_SHARED_LIB, RTLD_NOW | RTLD_LOCAL);
+	REQUIRE(h != NULL, "dlopen: %s", dlerror());
+	const char *api[] = {"goipc_strerror", "goipc_last_errno", "goipc_ring_init", "goipc_queue_create",
+			     "goipc_conn_close_write", "goipc_channel_open", "goipc_event_wait"};
+	for (size_t i = 0; i < sizeof api / sizeof api[0]; i++)
+		CHECK(dlsym(h, api[i]) != NULL, "%s is not exported", api[i]);
+	CHECK(dlsym(h, "goipc__join") == NULL, "an internal symbol is exported");
+	dlclose(h);
+}

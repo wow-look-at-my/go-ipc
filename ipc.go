@@ -8,7 +8,8 @@
 //
 // An endpoint with work to do makes no system call. An endpoint that cannot
 // proceed parks on a kernel wait. Nothing spins. A process that dies holding
-// a claim does not wedge the queue.
+// a claim does not wedge the queue. spec/README.md is the wire contract that
+// the C, C++ and Python implementations share.
 package ipc
 
 import (
