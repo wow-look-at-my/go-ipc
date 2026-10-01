@@ -152,6 +152,15 @@ int goipc__event_unlink_name(const char *name);
 
 int goipc__queue_send_until(goipc_queue *q, uint32_t type, const void *payload, size_t len, const struct timespec *deadline);
 int goipc__queue_recv_until(goipc_queue *q, void *dst, size_t cap, uint32_t *type, size_t *len, const struct timespec *deadline);
+/* With pending set, the queue's reader is a channel peer that connects later. */
+int goipc__queue_create(const char *name, size_t capacity, bool pending, goipc_queue **out);
+/* goipc__queue_open is goipc_queue_open without the check of the receiver. */
+int goipc__queue_open(const char *name, goipc_queue **out);
+/* The peer of a channel is the reader of tx. rx reports when it goes. */
+void goipc__channel_link(goipc_queue *tx, goipc_queue *rx);
+int goipc__channel_connect(goipc_queue *rx);
+/* goipc__queue_wake_receiver signals the not-empty event whether or not a receiver waits. */
+int goipc__queue_wake_receiver(goipc_queue *q);
 
 /* ---- identity.c: the procID and the life socket ---- */
 

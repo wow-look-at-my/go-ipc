@@ -25,14 +25,16 @@ int goipc_channel_create(const char *name, size_t capacity, goipc_channel **out)
 		rc = GOIPC_ENOMEM;
 		goto out;
 	}
-	if ((rc = goipc_queue_create(c2o, capacity, &c->tx)) != GOIPC_OK)
+	/* The direction to the peer has no reader until a peer connects. */
+	if ((rc = goipc__queue_create(c2o, capacity, true, &c->tx)) != GOIPC_OK)
 		goto out;
-	if ((rc = goipc_queue_create(o2c, capacity, &c->rx)) != GOIPC_OK) {
+	if ((rc = goipc__queue_create(o2c, capacity, false, &c->rx)) != GOIPC_OK) {
 		goipc_queue_close(c->tx);
 		goipc_queue_unlink(c->tx);
 		goipc_queue_destroy(c->tx);
 		goto out;
 	}
+	goipc__channel_link(c->tx, c->rx);
 	*out = c;
 	c = NULL;
 out:
@@ -56,10 +58,19 @@ int goipc_channel_open(const char *name, goipc_channel **out)
 	}
 	if ((rc = goipc_queue_open(o2c, &c->tx)) != GOIPC_OK)
 		goto out;
-	if ((rc = goipc_queue_open(c2o, &c->rx)) != GOIPC_OK) {
+	if ((rc = goipc__queue_open(c2o, &c->rx)) != GOIPC_OK) {
 		goipc_queue_destroy(c->tx);
 		goto out;
 	}
+	if ((rc = goipc__channel_connect(c->rx)) != GOIPC_OK) {
+		goipc_queue_destroy(c->rx);
+		goipc_queue_destroy(c->tx);
+		goto out;
+	}
+	goipc__channel_link(c->tx, c->rx);
+	/* The creator may already be parked. It wakes to find its peer, and to
+	 * start the watch on the peer's process. */
+	goipc__queue_wake_receiver(c->tx);
 	*out = c;
 	c = NULL;
 out:
@@ -94,10 +105,13 @@ int goipc_channel_recv(goipc_channel *c, void *dst, size_t cap, uint32_t *type, 
 	return goipc_queue_recv(c->rx, dst, cap, type, len, timeout_ns);
 }
 
+/* The receiving end closes first. The signal after it wakes a peer parked in
+ * a receive, which then finds this side gone. */
 int goipc_channel_close(goipc_channel *c)
 {
-	int rc = goipc_queue_close(c->tx);
-	int rc2 = goipc_queue_close(c->rx);
+	int rc = goipc_queue_close(c->rx);
+	goipc__queue_wake_receiver(c->tx);
+	int rc2 = goipc_queue_close(c->tx);
 	return rc != GOIPC_OK ? rc : rc2;
 }
 
@@ -112,6 +126,8 @@ void goipc_channel_destroy(goipc_channel *c)
 {
 	if (c == NULL)
 		return;
+	/* A close of a closed channel changes nothing. */
+	goipc_channel_close(c);
 	goipc_queue_destroy(c->tx);
 	goipc_queue_destroy(c->rx);
 	free(c);

@@ -7,11 +7,16 @@ _Static_assert(offsetof(struct goipc_ring_hdr, magic) == 0, "magic offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, version) == 8, "version offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, flags) == 12, "flags offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, capacity) == 16, "capacity offset");
+_Static_assert(offsetof(struct goipc_ring_hdr, consumer) == 24, "consumer offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, tail) == 128, "tail offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, head) == 256, "head offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, head_cache) == 384, "head_cache offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, recv_waiters) == 392, "recv_waiters offset");
 _Static_assert(offsetof(struct goipc_ring_hdr, send_waiters) == 396, "send_waiters offset");
+_Static_assert(offsetof(struct goipc_ring_hdr, slots) == GOIPC_CONTROL_SIZE, "slots offset");
+_Static_assert(offsetof(struct goipc_claim_slot, owner) == 0, "slot owner offset");
+_Static_assert(offsetof(struct goipc_claim_slot, at) == 8, "slot at offset");
+_Static_assert(offsetof(struct goipc_claim_slot, size) == 16, "slot size offset");
 
 static uint64_t align8(int32_t n)
 {
@@ -59,7 +64,7 @@ static void set_ring(goipc_ring *r, void *buf, uint64_t capacity)
 	r->mask = capacity - 1;
 }
 
-int goipc_ring_init(goipc_ring *r, void *buf, size_t len)
+int goipc__ring_init(goipc_ring *r, void *buf, size_t len, uint64_t consumer)
 {
 	int rc = check_buffer(buf, len);
 	if (rc != GOIPC_OK)
@@ -71,10 +76,18 @@ int goipc_ring_init(goipc_ring *r, void *buf, size_t len)
 	struct goipc_ring_hdr *h = buf;
 	h->capacity = capacity;
 	h->version = GOIPC_RING_VERSION;
+	atomic_store(&h->consumer, consumer);
+	for (size_t i = 0; i < GOIPC_CLAIM_SLOTS; i++)
+		atomic_store(&h->slots[i].at, GOIPC_NO_INTENT);
 	/* A peer that attaches meanwhile sees no magic or a complete header. */
 	atomic_store(&h->magic, GOIPC_RING_MAGIC);
 	set_ring(r, buf, capacity);
 	return GOIPC_OK;
+}
+
+int goipc_ring_init(goipc_ring *r, void *buf, size_t len)
+{
+	return goipc__ring_init(r, buf, len, GOIPC_PROC_NONE);
 }
 
 int goipc_ring_attach(goipc_ring *r, void *buf, size_t len)
@@ -117,7 +130,15 @@ int goipc_ring_empty(const goipc_ring *r)
 	return atomic_load(&h->head) == atomic_load(&h->tail);
 }
 
-int goipc_ring_try_claim(goipc_ring *r, uint32_t type, size_t len, goipc_claim *out)
+/* release clears the intent of a slot whose claim the reader can now pass.
+ * The owner keeps the slot for its next claim. */
+static void release(goipc_ring *r, int slot)
+{
+	if (slot >= 0)
+		atomic_store(&goipc__hdr(r)->slots[slot].at, GOIPC_NO_INTENT);
+}
+
+int goipc__ring_try_claim(goipc_ring *r, int slot, uint32_t type, size_t len, goipc_claim *out)
 {
 	if (type == GOIPC_TYPE_PADDING)
 		return GOIPC_ERESERVED;
@@ -125,6 +146,7 @@ int goipc_ring_try_claim(goipc_ring *r, uint32_t type, size_t len, goipc_claim *
 		return GOIPC_ETOOLARGE;
 
 	struct goipc_ring_hdr *h = goipc__hdr(r);
+	struct goipc_claim_slot *intent = slot >= 0 ? &h->slots[slot] : NULL;
 	int32_t rec = (int32_t)(GOIPC_RECORD_HEADER_SIZE + len);
 	uint64_t aligned = align8(rec);
 	uint64_t capacity = r->mask + 1;
@@ -150,11 +172,18 @@ int goipc_ring_try_claim(goipc_ring *r, uint32_t type, size_t len, goipc_claim *
 			/* head passed this tail value, so the tail is stale. */
 			if ((int64_t)used < 0)
 				continue;
-			if (used > capacity || capacity - used < need)
+			if (used > capacity || capacity - used < need) {
+				release(r, slot);
 				return GOIPC_EFULL;
+			}
 			atomic_store(&h->head_cache, head);
 		}
 
+		/* A reader that sees the new tail also finds this intent. */
+		if (intent != NULL) {
+			atomic_store(&intent->size, need);
+			atomic_store(&intent->at, tail);
+		}
 		if (!atomic_compare_exchange_strong(&h->tail, &tail, tail + need))
 			continue;
 		if (need != aligned) {
@@ -166,26 +195,34 @@ int goipc_ring_try_claim(goipc_ring *r, uint32_t type, size_t len, goipc_claim *
 	}
 
 	/* A negative length marks a claim in flight; the reader stops on it. */
-	atomic_store(len_at(r, index), -rec);
 	store_type(r, index, type);
+	atomic_store(len_at(r, index), -rec);
 
 	out->ring = r;
 	out->index = index;
 	out->total = rec;
+	out->slot = slot;
 	out->bytes = r->data + index + GOIPC_RECORD_HEADER_SIZE;
 	out->len = len;
 	return GOIPC_OK;
 }
 
+int goipc_ring_try_claim(goipc_ring *r, uint32_t type, size_t len, goipc_claim *out)
+{
+	return goipc__ring_try_claim(r, -1, type, len, out);
+}
+
 void goipc_claim_commit(goipc_claim *c)
 {
 	atomic_store(len_at(c->ring, c->index), c->total);
+	release(c->ring, c->slot);
 }
 
 void goipc_claim_abort(goipc_claim *c)
 {
 	store_type(c->ring, c->index, GOIPC_TYPE_PADDING);
 	atomic_store(len_at(c->ring, c->index), c->total);
+	release(c->ring, c->slot);
 }
 
 int goipc_ring_try_write(goipc_ring *r, uint32_t type, const void *payload, size_t len)
@@ -219,7 +256,7 @@ int goipc__ring_read(goipc_ring *r, int limit, goipc_read_fn fn, void *ctx, size
 			break;
 		uint64_t step = align8(len);
 		/* The bound against capacity keeps a corrupt length inside the region. */
-		if (len < (int32_t)GOIPC_RECORD_HEADER_SIZE || step > available - consumed || index + (uint64_t)len > capacity)
+		if (len < (int32_t)GOIPC_RECORD_HEADER_SIZE || step > available - consumed || index + step > capacity)
 			return GOIPC_ECORRUPT;
 		uint32_t type = load_type(r, index);
 		size_t plen = (size_t)len - GOIPC_RECORD_HEADER_SIZE;
@@ -274,4 +311,85 @@ int goipc_ring_try_recv(goipc_ring *r, void *dst, size_t cap, uint32_t *type, si
 	if (n < 0)
 		return n;
 	return n == 0 ? GOIPC_EEMPTY : GOIPC_OK;
+}
+
+/* ---- claim slots and the recovery of dead claims ---- */
+
+bool goipc__ring_stalled(goipc_ring *r, struct goipc_stall *st)
+{
+	struct goipc_ring_hdr *h = goipc__hdr(r);
+	uint64_t head = atomic_load(&h->head);
+	if (head == atomic_load(&h->tail))
+		return false;
+	int32_t length = atomic_load(len_at(r, head & r->mask));
+	if (length > 0)
+		return false;
+	st->at = head;
+	st->length = length;
+	st->nslots = 0;
+	for (int i = 0; i < (int)GOIPC_CLAIM_SLOTS; i++) {
+		uint64_t at = atomic_load(&h->slots[i].at);
+		if (at != GOIPC_NO_INTENT && at <= head && head < at + atomic_load(&h->slots[i].size))
+			st->slots[st->nslots++] = i;
+	}
+	return true;
+}
+
+bool goipc__ring_reclaim(goipc_ring *r, const struct goipc_stall *st, uint64_t end, const int *dead, int ndead)
+{
+	struct goipc_ring_hdr *h = goipc__hdr(r);
+	uint64_t index = st->at & r->mask;
+	uint64_t size = end - st->at;
+	/* A claim that crossed the wrap point goes one lap segment at a time. */
+	uint64_t to_end = r->mask + 1 - index;
+	if (size > to_end)
+		size = to_end;
+	int32_t expect = st->length;
+	if (!atomic_compare_exchange_strong(len_at(r, index), &expect, (int32_t)size))
+		return false;
+	/* Only the reader reads a header, so the type can follow the length. */
+	store_type(r, index, GOIPC_TYPE_PADDING);
+	if (st->at + size == end)
+		for (int i = 0; i < ndead; i++)
+			atomic_store(&h->slots[dead[i]].at, GOIPC_NO_INTENT);
+	return true;
+}
+
+int goipc__ring_acquire_slot(goipc_ring *r, uint64_t self, bool (*dead)(void *ctx, uint64_t id), void *ctx, int *slot)
+{
+	struct goipc_ring_hdr *h = goipc__hdr(r);
+	for (int i = 0; i < (int)GOIPC_CLAIM_SLOTS; i++) {
+		uint64_t expect = GOIPC_PROC_NONE;
+		if (atomic_compare_exchange_strong(&h->slots[i].owner, &expect, self)) {
+			atomic_store(&h->slots[i].at, GOIPC_NO_INTENT);
+			*slot = i;
+			return GOIPC_OK;
+		}
+	}
+	uint64_t head = atomic_load(&h->head);
+	for (int i = 0; i < (int)GOIPC_CLAIM_SLOTS; i++) {
+		struct goipc_claim_slot *s = &h->slots[i];
+		uint64_t owner = atomic_load(&s->owner);
+		if (owner == GOIPC_PROC_NONE || owner == self)
+			continue;
+		uint64_t at = atomic_load(&s->at);
+		if (at != GOIPC_NO_INTENT && at + atomic_load(&s->size) > head)
+			continue;
+		if (!dead(ctx, owner))
+			continue;
+		if (atomic_compare_exchange_strong(&s->owner, &owner, self)) {
+			atomic_store(&s->at, GOIPC_NO_INTENT);
+			*slot = i;
+			return GOIPC_OK;
+		}
+	}
+	return GOIPC_ETOOMANYCLAIMS;
+}
+
+void goipc__ring_drop_slot(goipc_ring *r, uint64_t self, int slot)
+{
+	struct goipc_ring_hdr *h = goipc__hdr(r);
+	atomic_store(&h->slots[slot].at, GOIPC_NO_INTENT);
+	uint64_t expect = self;
+	atomic_compare_exchange_strong(&h->slots[slot].owner, &expect, GOIPC_PROC_NONE);
 }
