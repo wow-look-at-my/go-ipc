@@ -20,6 +20,7 @@ enum {
 typedef void (*test_fn)(void);
 void harness_register(const char *name, test_fn fn, int flags);
 void harness_fail(const char *file, int line, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+void harness_fail_cond(const char *file, int line, const char *cond, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
 void harness_abort_test(void) __attribute__((noreturn));
 
 #define TEST(name, flags) \
@@ -30,13 +31,13 @@ void harness_abort_test(void) __attribute__((noreturn));
 #define CHECK(cond, ...) \
 	do { \
 		if (!(cond)) \
-			harness_fail(__FILE__, __LINE__, "CHECK(" #cond ") " __VA_ARGS__); \
+			harness_fail_cond(__FILE__, __LINE__, #cond, " " __VA_ARGS__); \
 	} while (0)
 
 #define REQUIRE(cond, ...) \
 	do { \
 		if (!(cond)) { \
-			harness_fail(__FILE__, __LINE__, "REQUIRE(" #cond ") " __VA_ARGS__); \
+			harness_fail_cond(__FILE__, __LINE__, #cond, " " __VA_ARGS__); \
 			harness_abort_test(); \
 		} \
 	} while (0)

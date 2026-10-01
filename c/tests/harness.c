@@ -48,6 +48,17 @@ void harness_fail(const char *file, int line, const char *fmt, ...)
 	atomic_fetch_add(&failures, 1);
 }
 
+void harness_fail_cond(const char *file, int line, const char *cond, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	fprintf(stderr, "    %s:%d: failed: %s: ", file, line, cond);
+	vfprintf(stderr, fmt, ap);
+	fputc('\n', stderr);
+	va_end(ap);
+	atomic_fetch_add(&failures, 1);
+}
+
 void harness_abort_test(void)
 {
 	if (!pthread_equal(pthread_self(), main_thread)) {
@@ -100,6 +111,12 @@ static void remove_leftovers(void)
 	globfree(&g);
 }
 
+static void run_one(test_fn fn)
+{
+	if (setjmp(abort_jmp) == 0)
+		fn();
+}
+
 int main(int argc, char **argv)
 {
 	int need = 0;
@@ -121,8 +138,7 @@ int main(int argc, char **argv)
 			continue;
 		int before = atomic_load(&failures);
 		int64_t start = now_ns();
-		if (setjmp(abort_jmp) == 0)
-			t->fn();
+		run_one(t->fn);
 		bool ok = atomic_load(&failures) == before;
 		double ms = (double)(now_ns() - start) / 1e6;
 		printf("%s %s (%.1f ms)\n", ok ? "PASS" : "FAIL", t->name, ms);
