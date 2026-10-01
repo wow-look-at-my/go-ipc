@@ -5,6 +5,7 @@ package ipc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"sync"
@@ -91,8 +92,12 @@ func openFIFO(path string) (*os.File, error) {
 	// it. Deadline support is the observable consequence of registration
 	// with the runtime poller.
 	if err := f.SetReadDeadline(time.Time{}); err != nil {
+		mode := "unknown"
+		if info, statErr := f.Stat(); statErr == nil {
+			mode = info.Mode().String()
+		}
 		f.Close()
-		return nil, errors.Join(ErrNotPollable, err)
+		return nil, errors.Join(ErrNotPollable, fmt.Errorf("%s has mode %s: %w", path, mode, err))
 	}
 	return f, nil
 }
