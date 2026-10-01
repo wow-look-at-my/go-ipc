@@ -287,9 +287,9 @@ TEST(queue_claim_commit_and_abort, 0)
 	goipc_claim c;
 	REQUIRE_RC(goipc_queue_claim(q, 2, 5, -1, &c), GOIPC_OK);
 	memcpy(c.bytes, "hello", 5);
-	goipc_queue_commit(q, &c);
+	REQUIRE_RC(goipc_queue_commit(q, &c), GOIPC_OK);
 	REQUIRE_RC(goipc_queue_claim(q, 3, 4, -1, &c), GOIPC_OK);
-	goipc_queue_abort(q, &c);
+	REQUIRE_RC(goipc_queue_abort(q, &c), GOIPC_OK);
 	uint8_t out[16];
 	uint32_t type;
 	size_t len;
@@ -300,13 +300,46 @@ TEST(queue_claim_commit_and_abort, 0)
 	drop_queue(q);
 }
 
+TEST(queue_commit_wakes_parked_receiver, T_THREADS)
+{
+	char name[96];
+	goipc_queue *q = new_queue(name, sizeof name, 4096);
+	struct op o = {.q = q, .rc = 99};
+	pthread_t th;
+	REQUIRE(pthread_create(&th, NULL, recv_thread, &o) == 0);
+	pause_ms(30);
+	CHECK(atomic_load(&goipc__hdr(goipc_queue_ring(q))->recv_waiters) == 1);
+	goipc_claim c;
+	REQUIRE_RC(goipc_queue_claim(q, 6, 3, -1, &c), GOIPC_OK);
+	memcpy(c.bytes, "abc", 3);
+	REQUIRE_RC(goipc_queue_commit(q, &c), GOIPC_OK);
+	pthread_join(th, NULL);
+	REQUIRE_RC(o.rc, GOIPC_OK);
+	REQUIRE(o.type == 6 && o.len == 3 && memcmp(o.buf, "abc", 3) == 0);
+	drop_queue(q);
+}
+
+TEST(queue_commit_and_abort_after_close_report_eclosed, 0)
+{
+	char name[96];
+	goipc_queue *q = new_queue(name, sizeof name, 4096);
+	goipc_claim a, b;
+	REQUIRE_RC(goipc_queue_claim(q, 1, 4, -1, &a), GOIPC_OK);
+	REQUIRE_RC(goipc_queue_claim(q, 2, 4, -1, &b), GOIPC_OK);
+	REQUIRE_RC(goipc_queue_close(q), GOIPC_OK);
+	REQUIRE_RC(goipc_queue_commit(q, &a), GOIPC_ECLOSED);
+	REQUIRE_RC(goipc_queue_abort(q, &b), GOIPC_ECLOSED);
+	REQUIRE_RC(goipc_queue_unlink(q), GOIPC_OK);
+	goipc_queue_destroy(q);
+}
+
 static void *claim_thread(void *arg)
 {
 	struct op *o = arg;
 	goipc_claim c;
 	o->rc = goipc_queue_claim(o->q, 3, 1000, -1, &c);
 	if (o->rc == GOIPC_OK)
-		goipc_queue_commit(o->q, &c);
+		o->rc = goipc_queue_commit(o->q, &c);
 	atomic_store(&o->done, true);
 	return NULL;
 }
@@ -325,7 +358,7 @@ TEST(queue_abort_then_read_wakes_parked_sender, T_THREADS)
 	REQUIRE(pthread_create(&th, NULL, claim_thread, &o) == 0);
 	pause_ms(30);
 	CHECK(!atomic_load(&o.done));
-	goipc_queue_abort(q, &c);
+	REQUIRE_RC(goipc_queue_abort(q, &c), GOIPC_OK);
 	/* A zero-size buffer steps over the padding and then stops. */
 	uint32_t type;
 	size_t len;

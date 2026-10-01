@@ -122,8 +122,11 @@ goipc_ring *goipc_queue_ring(goipc_queue *q);
 int goipc_queue_try_send(goipc_queue *q, uint32_t type, const void *payload, size_t len);
 int goipc_queue_send(goipc_queue *q, uint32_t type, const void *payload, size_t len, int64_t timeout_ns);
 int goipc_queue_claim(goipc_queue *q, uint32_t type, size_t len, int64_t timeout_ns, goipc_claim *out);
-void goipc_queue_commit(goipc_queue *q, goipc_claim *c);
-void goipc_queue_abort(goipc_queue *q, goipc_claim *c);
+/* Commit and abort publish the claim, then wake the receiver. A failed wake
+ * returns its error, and the claim stays published. After close they return
+ * GOIPC_ECLOSED and do not touch the claim, because the mapping is gone. */
+int goipc_queue_commit(goipc_queue *q, goipc_claim *c);
+int goipc_queue_abort(goipc_queue *q, goipc_claim *c);
 
 int goipc_queue_try_recv(goipc_queue *q, void *dst, size_t cap, uint32_t *type, size_t *len);
 int goipc_queue_recv(goipc_queue *q, void *dst, size_t cap, uint32_t *type, size_t *len, int64_t timeout_ns);
