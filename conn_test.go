@@ -147,6 +147,62 @@ func TestConnPeerCloseIsEOF(t *testing.T) {
 	assert.ErrorIs(t, err, io.EOF)
 }
 
+func TestConnCloseWriteHalfCloses(t *testing.T) {
+	server, client := newTestConnPair(t)
+	require.NoError(t, client.SetDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, server.SetDeadline(time.Now().Add(10*time.Second)))
+
+	_, err := client.Write([]byte("abc"))
+	require.NoError(t, err)
+	require.NoError(t, client.CloseWrite())
+
+	got, err := io.ReadAll(server)
+	require.NoError(t, err, "the half close must reach the peer as EOF")
+	assert.Equal(t, "abc", string(got))
+
+	_, err = server.Write([]byte("xyz"))
+	require.NoError(t, err)
+	back := make([]byte, 3)
+	_, err = io.ReadFull(client, back)
+	require.NoError(t, err, "the read side stays open after CloseWrite")
+	assert.Equal(t, "xyz", string(back))
+
+	_, err = client.Write([]byte("late"))
+	require.ErrorIs(t, err, net.ErrClosed)
+	require.ErrorIs(t, client.CloseWrite(), net.ErrClosed)
+
+	// Close must not send a second end-of-stream message.
+	require.NoError(t, client.Close())
+	_, _, err = server.Channel().TryRecv(nil)
+	assert.ErrorIs(t, err, ErrEmpty)
+}
+
+func TestConnCloseWriteWaitsForRoom(t *testing.T) {
+	server, client := newTestConnPair(t, WithCapacity(MinCapacity))
+	filler := make([]byte, 512)
+	err := client.Channel().TrySend(filler)
+	for err == nil {
+		err = client.Channel().TrySend(filler)
+	}
+	require.ErrorIs(t, err, ErrFull)
+	// An empty message is the smallest record, so after these the ring has
+	// no room for the end-of-stream message either.
+	for err = client.Channel().TrySend(nil); err == nil; err = client.Channel().TrySend(nil) {
+	}
+	require.ErrorIs(t, err, ErrFull)
+	require.NoError(t, client.SetWriteDeadline(time.Now().Add(50*time.Millisecond)))
+	require.ErrorIs(t, client.CloseWrite(), os.ErrDeadlineExceeded)
+
+	// The failed half close sent nothing, so a retry after the reader drains still delivers the end of the stream.
+	_, err = server.Channel().ReadBatch(contextWithTimeout(t), 1<<20, func(uint32, []byte) {})
+	require.NoError(t, err)
+	require.NoError(t, client.SetWriteDeadline(time.Now().Add(10*time.Second)))
+	require.NoError(t, client.CloseWrite())
+	require.NoError(t, server.SetReadDeadline(time.Now().Add(10*time.Second)))
+	_, err = server.Read(make([]byte, 1))
+	assert.ErrorIs(t, err, io.EOF)
+}
+
 func TestConnAddr(t *testing.T) {
 	server, _ := newTestConnPair(t)
 	assert.Equal(t, "ipc", server.LocalAddr().Network())
