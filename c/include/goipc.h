@@ -15,8 +15,12 @@ extern "C" {
 #endif
 
 #define GOIPC_RING_MAGIC UINT64_C(0x676F2D6970632D31)
-#define GOIPC_RING_VERSION 1u
-#define GOIPC_HEADER_SIZE 512u
+#define GOIPC_RING_VERSION 2u
+/* The table of claim slots follows it. */
+#define GOIPC_CONTROL_SIZE 512u
+#define GOIPC_CLAIM_SLOTS 256u
+#define GOIPC_CLAIM_SLOT_SIZE 64u
+#define GOIPC_HEADER_SIZE (GOIPC_CONTROL_SIZE + GOIPC_CLAIM_SLOTS * GOIPC_CLAIM_SLOT_SIZE)
 #define GOIPC_MIN_CAPACITY 4096u
 #define GOIPC_RECORD_HEADER_SIZE 8u
 #define GOIPC_TYPE_PADDING UINT32_C(0xFFFFFFFF)
@@ -45,7 +49,15 @@ typedef enum goipc_err {
 	/* The receive buffer is smaller than the next message, which stays queued. */
 	GOIPC_EBUFFER = -16,
 	/* The conn peer ended the stream. */
-	GOIPC_EOF = -17
+	GOIPC_EOF = -17,
+	/* The process at the other end exited or closed its end. */
+	GOIPC_EPEERGONE = -18,
+	/* A live process holds the name, or a channel already has its peer. */
+	GOIPC_EINUSE = -19,
+	/* A receive on a handle that does not own the receiving end. */
+	GOIPC_ENOTCONSUMER = -20,
+	/* Live claims hold every claim slot of the ring. */
+	GOIPC_ETOOMANYCLAIMS = -21
 } goipc_err;
 
 /* goipc_strerror returns a static description of err. */
@@ -74,6 +86,9 @@ typedef struct goipc_claim {
 	goipc_ring *ring;
 	uint64_t index;
 	int32_t total;
+	/* It sits in the padding after total, so the struct keeps its size and
+	 * layout. */
+	int32_t slot;
 	/* bytes is the payload region. Fill it, then commit or abort. */
 	uint8_t *bytes;
 	size_t len;
@@ -110,8 +125,12 @@ void goipc_event_destroy(goipc_event *e);
 
 typedef struct goipc_queue goipc_queue;
 
-/* */
+/* goipc_queue_create builds a new instance of the named queue and holds the
+ * name until close. It returns GOIPC_EINUSE while a live process holds the
+ * name. Only this handle may receive. */
 int goipc_queue_create(const char *name, size_t capacity, goipc_queue **out);
+/* goipc_queue_open attaches as a sender. It returns GOIPC_EPEERGONE when the
+ * receiver has exited or closed. */
 int goipc_queue_open(const char *name, goipc_queue **out);
 const char *goipc_queue_name(const goipc_queue *q);
 size_t goipc_queue_capacity(const goipc_queue *q);
@@ -130,7 +149,7 @@ int goipc_queue_abort(goipc_queue *q, goipc_claim *c);
 
 int goipc_queue_try_recv(goipc_queue *q, void *dst, size_t cap, uint32_t *type, size_t *len);
 int goipc_queue_recv(goipc_queue *q, void *dst, size_t cap, uint32_t *type, size_t *len, int64_t timeout_ns);
-/* */
+/* read_batch returns the count of messages it delivered, or an error. */
 int goipc_queue_read_batch(goipc_queue *q, int limit, goipc_read_fn fn, void *ctx, int64_t timeout_ns);
 
 int goipc_queue_close(goipc_queue *q);
@@ -142,6 +161,8 @@ void goipc_queue_destroy(goipc_queue *q);
 typedef struct goipc_channel goipc_channel;
 
 int goipc_channel_create(const char *name, size_t capacity, goipc_channel **out);
+/* goipc_channel_open returns GOIPC_EPEERGONE when the creator has gone, and
+ * GOIPC_EINUSE when another peer holds the channel. */
 int goipc_channel_open(const char *name, goipc_channel **out);
 goipc_queue *goipc_channel_tx(goipc_channel *c);
 goipc_queue *goipc_channel_rx(goipc_channel *c);
