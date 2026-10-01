@@ -167,6 +167,40 @@ TEST(ring_stale_head_cache_does_not_overrun, 0)
 	free(buf);
 }
 
+/* A producer moves tail before it stores -rec. Until it does, the reader must
+ * see zero there, not bytes left from an earlier payload. */
+TEST(ring_unpublished_claim_over_old_payload_reads_nothing, 0)
+{
+	void *buf;
+	goipc_ring r = new_ring(4096, &buf);
+	struct goipc_ring_hdr *h = goipc__hdr(&r);
+	static uint8_t p[2040];
+	for (size_t i = 0; i < sizeof p; i += 8) {
+		int32_t len = 16;
+		uint32_t type = 7;
+		memcpy(p + i, &len, 4);
+		memcpy(p + i + 4, &type, 4);
+	}
+	struct seen s = {.n = 0};
+	REQUIRE_RC(goipc_ring_try_write(&r, 1, p, sizeof p), GOIPC_OK);
+	REQUIRE_RC(goipc_ring_try_write(&r, 1, p, sizeof p), GOIPC_OK);
+	REQUIRE(goipc_ring_read(&r, 10, record, &s) == 2);
+	for (size_t i = 0; i < 4096; i++)
+		REQUIRE(r.data[i] == 0, "byte %zu of a consumed record is %02x", i, r.data[i]);
+
+	/* The next lap walks through the old payload one empty record at a time. */
+	for (uint64_t idx = 0; idx < 2048; idx += 8) {
+		atomic_fetch_add(&h->tail, 8);
+		int n = goipc_ring_read(&r, 10, record, &s);
+		REQUIRE(n == 0, "unpublished claim at %llu: read returned %d", (unsigned long long)idx, n);
+		uint32_t type = 9;
+		memcpy(r.data + idx + 4, &type, 4);
+		atomic_store((_Atomic int32_t *)(void *)(r.data + idx), 8);
+		REQUIRE(goipc_ring_read(&r, 10, record, &s) == 1);
+	}
+	free(buf);
+}
+
 TEST(ring_abort_becomes_padding, 0)
 {
 	void *buf;
@@ -252,28 +286,38 @@ TEST(ring_detects_corrupt_length, 0)
 
 #define PRODUCERS 4
 #define PER_PRODUCER 20000
+#define MIN_PAYLOAD 8
+#define PAYLOAD_SPAN 61
+
+static atomic_bool stress_stop;
 
 struct producer {
 	goipc_ring *r;
 	uint32_t id;
 };
 
+static size_t stress_len(uint32_t seq)
+{
+	return MIN_PAYLOAD + (seq * 7) % PAYLOAD_SPAN;
+}
+
 /* The ring itself never blocks, so a test producer retries on a full ring.
  * The queue tests cover the parked path. */
 static void *produce(void *arg)
 {
 	struct producer *p = arg;
-	uint8_t msg[64];
-	for (uint32_t seq = 0; seq < PER_PRODUCER; seq++) {
-		size_t len = 8 + seq % 50;
+	uint8_t msg[MIN_PAYLOAD + PAYLOAD_SPAN];
+	for (uint32_t seq = 0; seq < PER_PRODUCER && !atomic_load(&stress_stop); seq++) {
+		size_t len = stress_len(seq);
 		memcpy(msg, &p->id, 4);
 		memcpy(msg + 4, &seq, 4);
 		for (size_t i = 8; i < len; i++)
 			msg[i] = (uint8_t)(seq + i);
 		int rc;
-		while ((rc = goipc_ring_try_write(p->r, p->id, msg, len)) == GOIPC_EFULL)
+		while ((rc = goipc_ring_try_write(p->r, p->id, msg, len)) == GOIPC_EFULL && !atomic_load(&stress_stop))
 			sched_yield();
-		CHECK_RC(rc, GOIPC_OK);
+		if (rc != GOIPC_EFULL)
+			CHECK_RC(rc, GOIPC_OK);
 	}
 	return NULL;
 }
@@ -281,44 +325,66 @@ static void *produce(void *arg)
 struct consumer {
 	uint32_t next[PRODUCERS];
 	long total;
+	bool bad;
 };
 
 static void consume(void *ctx, uint32_t type, const uint8_t *payload, size_t len)
 {
 	struct consumer *c = ctx;
 	uint32_t id, seq;
+	if (c->bad)
+		return;
+	if (len < 8) {
+		CHECK(len >= 8, "phantom record: type %u len %zu", type, len);
+		c->bad = true;
+		return;
+	}
 	memcpy(&id, payload, 4);
 	memcpy(&seq, payload + 4, 4);
-	CHECK(id == type && id < PRODUCERS, "type %u id %u", type, id);
-	if (id >= PRODUCERS)
+	if (id != type || id >= PRODUCERS || seq != c->next[id] || len != stress_len(seq)) {
+		CHECK(false, "type %u id %u seq %u len %zu", type, id, seq, len);
+		c->bad = true;
 		return;
-	CHECK(seq == c->next[id], "producer %u seq %u, want %u", id, seq, c->next[id]);
-	CHECK(len == 8 + seq % 50, "len %zu for seq %u", len, seq);
-	for (size_t i = 8; i < len; i++)
-		CHECK(payload[i] == (uint8_t)(seq + i));
+	}
+	for (size_t i = 8; i < len; i++) {
+		if (payload[i] != (uint8_t)(seq + i)) {
+			CHECK(false, "producer %u seq %u byte %zu differs", id, seq, i);
+			c->bad = true;
+			return;
+		}
+	}
 	c->next[id] = seq + 1;
 	c->total++;
 }
 
+/* Varied sizes put record headers where earlier laps had payload bytes. */
 TEST(ring_mpsc_stress_keeps_per_producer_order, T_THREADS)
 {
 	void *buf;
 	goipc_ring r = new_ring(4096, &buf);
 	pthread_t th[PRODUCERS];
 	struct producer ps[PRODUCERS];
+	atomic_store(&stress_stop, false);
 	for (uint32_t i = 0; i < PRODUCERS; i++) {
 		ps[i] = (struct producer){&r, i};
 		REQUIRE(pthread_create(&th[i], NULL, produce, &ps[i]) == 0);
 	}
-	struct consumer c = {{0}, 0};
-	while (c.total < (long)PRODUCERS * PER_PRODUCER) {
+	struct consumer c = {{0}, 0, false};
+	int err = 0;
+	while (c.total < (long)PRODUCERS * PER_PRODUCER && !c.bad) {
 		int n = goipc_ring_read(&r, 64, consume, &c);
-		REQUIRE(n >= 0, "read: %s", goipc_strerror(n));
+		if (n < 0) {
+			err = n;
+			break;
+		}
 		if (n == 0)
 			sched_yield();
 	}
+	atomic_store(&stress_stop, true);
 	for (int i = 0; i < PRODUCERS; i++)
 		pthread_join(th[i], NULL);
+	REQUIRE_RC(err, GOIPC_OK);
+	REQUIRE(!c.bad);
 	REQUIRE(goipc_ring_empty(&r));
 	free(buf);
 }

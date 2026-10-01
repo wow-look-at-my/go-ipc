@@ -234,7 +234,9 @@ int goipc__ring_read(goipc_ring *r, int limit, goipc_read_fn fn, void *ctx, size
 			count++;
 		}
 		consumed += step;
-		/* Zeroing before head moves keeps the slot unreadable on the next lap. */
+		/* A producer claims before it stores -rec, so every byte outside
+		 * [head, tail) must read as zero or a stale payload looks like a len. */
+		memset(r->data + index + 4, 0, (size_t)step - 4);
 		atomic_store(len_at(r, index), 0);
 	}
 
