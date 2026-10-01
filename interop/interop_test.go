@@ -21,11 +21,11 @@ import (
 )
 
 const (
-	langsEnv     = "GOIPC_INTEROP_LANGS"
-	capacity     = 4096
-	queueCount   = 3000
-	mpscCount    = 2000
-	streamBytes  = 300000
+	langsEnv    = "GOIPC_INTEROP_LANGS"
+	capacity    = 4096
+	queueCount  = 3000
+	mpscCount   = 2000
+	streamBytes = 300000
 	// recoverCount keeps the claims of the recover cell at the cursors that spec/peer.md lists.
 	recoverCount = 200
 	goneCount    = 500
