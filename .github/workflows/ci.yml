@@ -51,10 +51,4 @@ jobs:
         run: make -C python interpreters
       - if: runner.os == 'Linux'
         run: make native
-      - if: runner.os != 'Linux'
-        shell: bash
-        run: |
-          mkdir -p codegen/go/demo interop/internal/demo
-          ipcgen/build/ipcgen --lang go --out codegen/go/demo/demo.go spec/vectors/schema/example.ipc
-          cp codegen/go/demo/demo.go interop/internal/demo/demo.go
       - uses: wow-look-at-my/go-toolchain@master

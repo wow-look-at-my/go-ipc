@@ -23,13 +23,13 @@ export PYTHONPATH := $(ROOT)/python:$(GEN)/py
 
 SUBMAKE = $(MAKE) GEN_DIR=$(GEN) IPCGEN=$(IPCGEN)
 
-.PHONY: all build test native clean gen ipcgen prepare-go \
+.PHONY: all build test native clean gen ipcgen \
 	build-c build-cpp \
 	test-go test-c test-cpp test-py test-codegen
 
 all: build
 
-build: build-c build-cpp prepare-go
+build: build-c build-cpp
 
 # native is everything except the root Go run. CI runs it, then hands the
 # root run to the go-toolchain action.
@@ -51,11 +51,6 @@ gen: $(IPCGEN)
 	$(IPCGEN) --lang c --out $(GEN)/c/demo.h $(SCHEMA)
 	$(IPCGEN) --lang cpp --out $(GEN)/cpp/demo.hpp $(SCHEMA)
 	$(IPCGEN) --lang py --out $(GEN)/py/demo.py $(SCHEMA)
-
-# The Go modules that use generated code take a copy, which git ignores.
-prepare-go: gen
-	+$(SUBMAKE) -C codegen prepare
-	+$(SUBMAKE) -C interop prepare
 
 build-c: gen
 	+$(SUBMAKE) -C c build

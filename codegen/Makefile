@@ -1,7 +1,7 @@
 # Tests the code that ipcgen generates from spec/vectors/schema/example.ipc.
 # The top-level Makefile passes GEN_DIR (the generated code) and IPCGEN (the binary).
-# `test` runs the C, C++ and Python tests. `prepare` copies the generated Go into go/demo,
-# where the root go-toolchain run tests it.
+# `test` runs the C, C++ and Python tests. The Go test lives in go/, where go-toolchain
+# generates go/demo/demo.go itself and the root run tests it.
 
 ROOT := $(abspath $(CURDIR)/..)
 VECTORS := $(ROOT)/spec/vectors/schema
@@ -13,7 +13,7 @@ CXX := c++
 include $(ROOT)/python/versions.mk
 PY_TESTS := $(addprefix test-py-,$(PY_VERSIONS))
 
-.PHONY: test test-c test-cpp test-py $(PY_TESTS) prepare clean require FORCE
+.PHONY: test test-c test-cpp test-py $(PY_TESTS) clean require FORCE
 
 test: test-c test-cpp test-py
 
@@ -55,9 +55,6 @@ $(PY_TESTS): test-py-%: $(OUT)/schema.json
 		exit 1; }
 	cd py && PYTHONPATH=$(GEN_DIR)/py IPCGEN_VECTORS=$(VECTORS) IPCGEN_SCHEMA_JSON=$(OUT)/schema.json \
 		uv run --no-project --no-python-downloads --python $* python -W error -m unittest -v test_demo
-
-prepare: require
-	cp $(GEN_DIR)/go/demo/demo.go go/demo/demo.go
 
 clean:
 	rm -rf $(OUT) go/demo/demo.go go/build py/__pycache__
