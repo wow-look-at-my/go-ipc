@@ -42,7 +42,7 @@ TEST(ring_header_offsets_match_spec, 0)
 	const struct field spec[] = {SPEC_FIELDS};
 	const struct field ours[] = {
 		HDR_FIELD(magic), HDR_FIELD(version), HDR_FIELD(flags),
-		HDR_FIELD(capacity), HDR_FIELD(tail), HDR_FIELD(head),
+		HDR_FIELD(capacity), HDR_FIELD(consumer), HDR_FIELD(tail), HDR_FIELD(head),
 		HDR_FIELD(head_cache), HDR_FIELD(recv_waiters), HDR_FIELD(send_waiters),
 	};
 	REQUIRE(SPEC_FIELD_COUNT == sizeof ours / sizeof ours[0], "spec lists %d fields", SPEC_FIELD_COUNT);

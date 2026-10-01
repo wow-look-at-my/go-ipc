@@ -43,7 +43,7 @@ static int fill(goipc_queue *q, size_t len)
 	return n;
 }
 
-TEST(queue_create_lays_out_three_files, 0)
+TEST(queue_create_lays_out_an_instance, 0)
 {
 	char name[96];
 	goipc_queue *q = new_queue(name, sizeof name, 8192);
@@ -52,13 +52,24 @@ TEST(queue_create_lays_out_three_files, 0)
 	REQUIRE(goipc_queue_max_message_size(q) == 4088);
 	REQUIRE(goipc_ring_capacity(goipc_queue_ring(q)) == 8192);
 
-	char *seg = goipc__segment_path(name);
-	char ne[128], nf[128];
-	snprintf(ne, sizeof ne, "/dev/shm/go-ipc-%s.ne.event", name);
-	snprintf(nf, sizeof nf, "/dev/shm/go-ipc-%s.nf.event", name);
+	/* The name file and the .inc file point at an instance whose id is in
+	 * the segment and event names. */
+	char inc[GOIPC_INC_LEN + 1];
+	REQUIRE_RC(goipc__read_name(name, inc), GOIPC_OK);
+	REQUIRE(strlen(inc) == 16 && strspn(inc, "0123456789abcdef") == 16, "inc %s", inc);
+	char namefile[160], incfile[160], seg[160], ne[160], nf[160];
+	snprintf(namefile, sizeof namefile, "/dev/shm/go-ipc-%s.name", name);
+	snprintf(incfile, sizeof incfile, "/dev/shm/go-ipc-%s.inc", name);
+	snprintf(seg, sizeof seg, "/dev/shm/go-shm-%s.%s", name, inc);
+	snprintf(ne, sizeof ne, "/dev/shm/go-ipc-%s.%s.ne.event", name, inc);
+	snprintf(nf, sizeof nf, "/dev/shm/go-ipc-%s.%s.nf.event", name, inc);
 	struct stat st;
+	REQUIRE(stat(namefile, &st) == 0);
+	CHECK(S_ISREG(st.st_mode) && (st.st_mode & 0077) == 0, "mode %o", st.st_mode & 0777);
+	REQUIRE(stat(incfile, &st) == 0);
+	CHECK(S_ISREG(st.st_mode) && st.st_size == 16 && (st.st_mode & 0077) == 0);
 	REQUIRE(stat(seg, &st) == 0);
-	CHECK(S_ISREG(st.st_mode) && st.st_size == 512 + 8192, "segment size %lld", (long long)st.st_size);
+	CHECK(S_ISREG(st.st_mode) && st.st_size == GOIPC_HEADER_SIZE + 8192, "segment size %lld", (long long)st.st_size);
 	CHECK((st.st_mode & 0077) == 0, "mode %o", st.st_mode & 0777);
 	REQUIRE(stat(ne, &st) == 0);
 	CHECK(S_ISFIFO(st.st_mode));
@@ -79,11 +90,12 @@ TEST(queue_create_lays_out_three_files, 0)
 
 	REQUIRE_RC(goipc_queue_close(q), GOIPC_OK);
 	REQUIRE_RC(goipc_queue_unlink(q), GOIPC_OK);
+	CHECK(!path_exists(namefile));
+	CHECK(!path_exists(incfile));
 	CHECK(!path_exists(seg));
 	CHECK(!path_exists(ne));
 	CHECK(!path_exists(nf));
 	goipc_queue_destroy(q);
-	free(seg);
 }
 
 TEST(queue_rejects_bad_arguments, 0)
@@ -244,7 +256,9 @@ TEST(queue_close_releases_blocked_send_and_recv, T_THREADS)
 	pthread_join(tr, NULL);
 	pthread_join(ts, NULL);
 	CHECK_RC(r.rc, GOIPC_ECLOSED);
-	CHECK_RC(s.rc, GOIPC_ECLOSED);
+	/* Close clears the consumer before it closes the events, so the sender
+	 * can wake to find the receiver gone. */
+	CHECK(s.rc == GOIPC_ECLOSED || s.rc == GOIPC_EPEERGONE, "send returned %s", goipc_strerror(s.rc));
 	drop_queue(empty);
 	drop_queue(full);
 }
