@@ -107,9 +107,46 @@ QueuePingPong          4715 ns/op   4 allocs/op   # parks on every message
 
 The ring is the fast path and costs no system call. Everything above a microsecond is the wakeup, and a wakeup happens whenever a side finds nothing to do. A consumer that outruns its producer therefore parks on almost every message, and pays for it. `ReadBatch` is the answer when a burst exists, because it amortizes one wakeup over the whole batch.
 
+## Other languages
+
+C, C++ and Python speak the same wire format. A process in any of them shares a queue, channel or stream with a Go process.
+
+| language | where | form |
+| --- | --- | --- |
+| C | `c/` | `libgoipc.so` / `libgoipc.a`, API in `c/include/goipc.h` |
+| C++ | `cpp/` | header-only C++20, `#include <goipc/goipc.hpp>` |
+| Python | `python/` | package `goipc` over the C library, CPython 3.8 and later |
+
+The contract lives in [go-ipc-spec](https://github.com/wow-look-at-my/go-ipc-spec), mounted here at `spec/`. A cross-language suite in `interop/` runs every pair of languages against each other.
+
+## Typed messages
+
+`ipcgen` turns a schema into matching message types for Go, C, C++ and Python. A value encoded in one language decodes to the same value in the others.
+
+```
+package demo
+
+message Point = 11 {
+	id u64
+	tags [4]u16
+	label string
+}
+```
+
+```sh
+go install github.com/wow-look-at-my/go-ipc/ipcgen@latest
+ipcgen --lang c --out demo.h demo.ipc   # also: go, cpp, py
+```
+
+The schema language is in `spec/schema.md`.
+
+## Build and test
+
+`make test` builds and tests every implementation in parallel, then runs the cross-language suite. `make -C python interpreters` installs the Python versions that the Python suite runs on.
+
 ## Platforms
 
-Linux, macOS and Windows. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows.
+The Go package runs on Linux, macOS and Windows. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows. The C, C++ and Python implementations run on Linux.
 
 ## Documentation
 
