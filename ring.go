@@ -13,14 +13,19 @@ const (
 	cacheLine = 128
 
 	ringMagic   = uint64(0x676F2D6970632D31) // "go-ipc-1"
-	ringVersion = uint32(1)
+	ringVersion = uint32(2)
 
 	// RecordHeaderSize is the per-message overhead a ring adds, in bytes.
 	RecordHeaderSize = 8
 
-	// HeaderSize is the size of the ring control block that precedes the
-	// data region.
-	HeaderSize = 4 * cacheLine
+	// ClaimSlots is the number of claims a ring can attribute to their producers at the same time.
+	ClaimSlots = 256
+
+	slotSize    = 64
+	controlSize = 4 * cacheLine
+
+	// HeaderSize is the size of the ring control block that precedes the data region.
+	HeaderSize = controlSize + ClaimSlots*slotSize
 
 	// MinCapacity is the smallest data region a ring accepts.
 	MinCapacity = 4096
@@ -30,6 +35,9 @@ const (
 	// TypePadding fills the tail of the data region when a record would
 	// otherwise straddle the wrap point. A reader skips it.
 	TypePadding = uint32(0xFFFFFFFF)
+
+	// noIntent marks a claim slot whose owner claims nothing right now.
+	noIntent = math.MaxUint64
 )
 
 // ringHeader is the control block. It is mapped directly onto the
@@ -40,7 +48,9 @@ type ringHeader struct {
 	version  uint32
 	flags    uint32
 	capacity uint64
-	_        [cacheLine - 24]byte
+	// consumer is the procID of the process that reads the ring.
+	consumer atomic.Uint64
+	_        [cacheLine - 32]byte
 
 	// tail is the producer cursor. Producers claim by advancing it.
 	tail atomic.Uint64
@@ -57,6 +67,18 @@ type ringHeader struct {
 	// sendWaiters counts producers parked on the not-full event.
 	sendWaiters atomic.Int32
 	_           [cacheLine - 16]byte
+
+	slots [ClaimSlots]claimSlot
+}
+
+// A claimSlot names the process behind a claim, so the reader can tell a
+// claim in progress from a claim its producer died holding.
+type claimSlot struct {
+	owner atomic.Uint64
+	// at and size are the cursor range the owner claims, or is about to.
+	at   atomic.Uint64
+	size atomic.Uint64
+	_    [slotSize - 24]byte
 }
 
 // A wrong size here would put a cursor on the wrong cache line and silently
@@ -86,6 +108,12 @@ func RingSize(capacity int) int {
 // Every byte of buf is overwritten. InitRing has a single caller, and every
 // other participant calls AttachRing.
 func InitRing(buf []byte) (*Ring, error) {
+	return initRing(buf, noProc)
+}
+
+// initRing is InitRing with the consumer recorded before the ring becomes
+// visible, so a peer that attaches never sees a ring without its reader.
+func initRing(buf []byte, consumer procID) (*Ring, error) {
 	if len(buf) < HeaderSize+MinCapacity {
 		return nil, ErrTooSmall
 	}
@@ -98,6 +126,10 @@ func InitRing(buf []byte) (*Ring, error) {
 	hdr := (*ringHeader)(unsafe.Pointer(&buf[0]))
 	hdr.capacity = capacity
 	hdr.version = ringVersion
+	hdr.consumer.Store(uint64(consumer))
+	for idx := range hdr.slots {
+		hdr.slots[idx].at.Store(noIntent)
+	}
 	// The magic is written last and read so a peer that attaches while
 	// this runs sees either nothing or a complete header.
 	atomic.StoreUint64(&hdr.magic, ringMagic)
@@ -172,6 +204,10 @@ func (r *Ring) storeLength(idx uint64, v int32) {
 	atomic.StoreInt32((*int32)(unsafe.Pointer(&r.data[idx])), v)
 }
 
+func (r *Ring) casLength(idx uint64, old, v int32) bool {
+	return atomic.CompareAndSwapInt32((*int32)(unsafe.Pointer(&r.data[idx])), old, v)
+}
+
 // The type field is ordered by the release store and the acquire load of the
 // length beside it, so it needs no atomic of its own.
 func (r *Ring) loadType(idx uint64) uint32 {
@@ -190,15 +226,16 @@ type Claim struct {
 	r     *Ring
 	index uint64
 	total int32
+	slot  int
 
-	// Bytes is the payload region. Writes to it become visible to the
-	// reader on Commit.
+	// Bytes is the payload region. Writes to it become visible to the reader on Commit.
 	Bytes []byte
 }
 
 // Commit publishes the claim to the reader.
 func (c Claim) Commit() {
 	c.r.storeLength(c.index, c.total)
+	c.r.release(c.slot)
 }
 
 // Abort discards the claim. The region becomes a padding record, which the
@@ -206,6 +243,15 @@ func (c Claim) Commit() {
 func (c Claim) Abort() {
 	c.r.storeType(c.index, TypePadding)
 	c.r.storeLength(c.index, c.total)
+	c.r.release(c.slot)
+}
+
+// release clears the intent of a slot whose claim the reader can now pass.
+// The owner keeps the slot for its next claim.
+func (r *Ring) release(slot int) {
+	if slot >= 0 {
+		r.hdr.slots[slot].at.Store(noIntent)
+	}
 }
 
 // hasRoom reports whether need bytes fit between head and tail.
@@ -218,10 +264,14 @@ func hasRoom(tail, head, capacity, need uint64) bool {
 
 // TryClaim reserves room for a payload of length bytes and returns it for the
 // caller to fill. It returns ErrFull when the ring has no room.
-//
-// This is the allocation-free write path: build the message straight into
-// Claim.Bytes rather than into a buffer that Write then copies.
 func (r *Ring) TryClaim(typ uint32, length int) (Claim, error) {
+	return r.tryClaim(-1, typ, length)
+}
+
+// tryClaim is TryClaim for the producer that owns slot. The slot records the
+// cursor range before the claim takes it. A reader stopped inside that range
+// can therefore always find the producer that is responsible.
+func (r *Ring) tryClaim(slot int, typ uint32, length int) (Claim, error) {
 	if typ == TypePadding {
 		return Claim{}, ErrReservedType
 	}
@@ -229,6 +279,10 @@ func (r *Ring) TryClaim(typ uint32, length int) (Claim, error) {
 		return Claim{}, ErrMessageTooLarge
 	}
 
+	var intent *claimSlot
+	if slot >= 0 {
+		intent = &r.hdr.slots[slot]
+	}
 	recordLen := int32(RecordHeaderSize + length)
 	aligned := align(recordLen)
 	capacity := uint64(r.Capacity())
@@ -254,11 +308,16 @@ func (r *Ring) TryClaim(typ uint32, length int) (Claim, error) {
 				continue
 			}
 			if !hasRoom(tail, head, capacity, need) {
+				r.release(slot)
 				return Claim{}, ErrFull
 			}
 			r.hdr.headCache.Store(head)
 		}
 
+		if intent != nil {
+			intent.size.Store(need)
+			intent.at.Store(tail)
+		}
 		if !r.hdr.tail.CompareAndSwap(tail, tail+need) {
 			continue
 		}
@@ -270,16 +329,15 @@ func (r *Ring) TryClaim(typ uint32, length int) (Claim, error) {
 		break
 	}
 
-	// A negative length marks the record claimed but not yet readable. The
-	// reader stops on it, and it tells a diagnostic tool the difference
-	// between a slot in flight and a slot never used.
-	r.storeLength(index, -recordLen)
+	// A negative length marks the record claimed but not yet readable. The reader stops on it.
 	r.storeType(index, typ)
+	r.storeLength(index, -recordLen)
 
 	return Claim{
 		r:     r,
 		index: index,
 		total: recordLen,
+		slot:  slot,
 		Bytes: r.data[index+RecordHeaderSize : index+uint64(recordLen) : index+uint64(recordLen)],
 	}, nil
 }
@@ -287,7 +345,11 @@ func (r *Ring) TryClaim(typ uint32, length int) (Claim, error) {
 // TryWrite copies payload into the ring as a single record of the given
 // type. It returns ErrFull when the ring has no room.
 func (r *Ring) TryWrite(typ uint32, payload []byte) error {
-	c, err := r.TryClaim(typ, len(payload))
+	return r.tryWrite(-1, typ, payload)
+}
+
+func (r *Ring) tryWrite(slot int, typ uint32, payload []byte) error {
+	c, err := r.tryClaim(slot, typ, len(payload))
 	if err != nil {
 		return err
 	}
@@ -311,6 +373,7 @@ func (r *Ring) Read(limit int, fn ReadFunc) (int, error) {
 	}
 	head := r.hdr.head.Load()
 	available := r.hdr.tail.Load() - head
+	capacity := uint64(r.Capacity())
 
 	var consumed uint64
 	count := 0
@@ -321,7 +384,7 @@ func (r *Ring) Read(limit int, fn ReadFunc) (int, error) {
 			break
 		}
 		step := align(length)
-		if length < RecordHeaderSize || step > available-consumed {
+		if length < RecordHeaderSize || step > available-consumed || index+step > capacity {
 			return count, ErrCorrupt
 		}
 		typ := r.loadType(index)

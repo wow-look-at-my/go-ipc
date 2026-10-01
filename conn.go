@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -36,8 +35,8 @@ type Conn struct {
 	// eofSent is set once this side has sent the end-of-stream message.
 	eofSent atomic.Bool
 
-	readDeadline  atomic.Pointer[time.Time]
-	writeDeadline atomic.Pointer[time.Time]
+	readDeadline  deadline
+	writeDeadline deadline
 
 	// base is cancelled by Close, so every in-flight Read and Write returns
 	// without a watcher goroutine of its own.
@@ -95,19 +94,10 @@ func newConn(ch *Channel, name string) *Conn {
 // boundaries back.
 func (c *Conn) Channel() *Channel { return c.ch }
 
-// deadlineContext builds the context for a single operation. A connection
-// close cancels it too, so a blocked Read or Write returns promptly.
-func (c *Conn) deadlineContext(d *atomic.Pointer[time.Time]) (context.Context, context.CancelFunc) {
-	if t := d.Load(); t != nil && !t.IsZero() {
-		return context.WithDeadline(c.base, *t)
-	}
-	return c.base, func() {}
-}
-
 // translate maps a context error onto the error a net.Conn caller expects.
-func (c *Conn) translate(err error) error {
+func (c *Conn) translate(ctx context.Context, err error) error {
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(context.Cause(ctx), os.ErrDeadlineExceeded):
 		return os.ErrDeadlineExceeded
 	case errors.Is(err, context.Canceled), errors.Is(err, ErrClosed):
 		return net.ErrClosed
@@ -117,7 +107,8 @@ func (c *Conn) translate(err error) error {
 }
 
 // Read implements io.Reader. It returns io.EOF after the peer has
-// closed and every byte it sent has been consumed.
+// closed and every byte it sent has been consumed. A peer that exits without
+// a Close ends the stream with ErrPeerGone instead.
 func (c *Conn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
@@ -126,11 +117,15 @@ func (c *Conn) Read(p []byte) (int, error) {
 		if c.eof {
 			return 0, io.EOF
 		}
-		ctx, cancel := c.deadlineContext(&c.readDeadline)
-		typ, msg, err := c.ch.RecvInto(ctx, c.buf[:0])
-		cancel()
+		ctx, done, err := c.readDeadline.begin(c.base)
 		if err != nil {
-			return 0, c.translate(err)
+			return 0, err
+		}
+		typ, msg, err := c.ch.RecvInto(ctx, c.buf[:0])
+		err = c.translate(ctx, err)
+		done()
+		if err != nil {
+			return 0, err
 		}
 		if typ == typeStreamEOF {
 			c.eof = true
@@ -160,11 +155,15 @@ func (c *Conn) Write(p []byte) (int, error) {
 		if end > len(p) {
 			end = len(p)
 		}
-		ctx, cancel := c.deadlineContext(&c.writeDeadline)
-		err := c.ch.SendTyped(ctx, typeStreamData, p[written:end])
-		cancel()
+		ctx, done, err := c.writeDeadline.begin(c.base)
 		if err != nil {
-			return written, c.translate(err)
+			return written, err
+		}
+		err = c.ch.SendTyped(ctx, typeStreamData, p[written:end])
+		err = c.translate(ctx, err)
+		done()
+		if err != nil {
+			return written, err
 		}
 		written = end
 	}
@@ -214,19 +213,21 @@ func (c *Conn) RemoteAddr() net.Addr { return c.addr }
 
 // SetDeadline sets both the read and the write deadline.
 func (c *Conn) SetDeadline(t time.Time) error {
-	c.readDeadline.Store(&t)
-	c.writeDeadline.Store(&t)
+	c.readDeadline.set(t)
+	c.writeDeadline.set(t)
 	return nil
 }
 
-// SetReadDeadline sets the deadline for future Read calls.
+// SetReadDeadline sets the deadline for Read calls, including a Read that is
+// already blocked. The zero time means no deadline.
 func (c *Conn) SetReadDeadline(t time.Time) error {
-	c.readDeadline.Store(&t)
+	c.readDeadline.set(t)
 	return nil
 }
 
-// SetWriteDeadline sets the deadline for future Write calls.
+// SetWriteDeadline sets the deadline for Write calls, including a Write that
+// is already blocked. The zero time means no deadline.
 func (c *Conn) SetWriteDeadline(t time.Time) error {
-	c.writeDeadline.Store(&t)
+	c.writeDeadline.set(t)
 	return nil
 }

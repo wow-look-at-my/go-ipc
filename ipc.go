@@ -6,9 +6,9 @@
 // no thread and honors a [context.Context]. [Queue], [Channel] and [Conn]
 // combine both into named endpoints with blocking sends and receives.
 //
-// An active endpoint moves messages with no system call. A side that cannot
-// proceed parks on a kernel wait and never spins. See README.md for usage,
-// docs/design.md for layout, and spec/README.md for the wire contract that
+// An endpoint with work to do makes no system call. An endpoint that cannot
+// proceed parks on a kernel wait. Nothing spins. A process that dies holding
+// a claim does not wedge the queue. spec/README.md is the wire contract that
 // the C, C++ and Python implementations share.
 package ipc
 
@@ -55,6 +55,18 @@ var (
 	// ErrNotPollable reports an event handle that cannot join the Go poller.
 	// A wait on it would occupy a thread, so the constructor refuses it.
 	ErrNotPollable = errors.New("ipc: event handle does not support polling")
+
+	// ErrPeerGone reports that the process at the other end exited or closed its end.
+	ErrPeerGone = errors.New("ipc: peer is gone")
+
+	// ErrInUse reports a name that a live process holds.
+	ErrInUse = errors.New("ipc: name is in use")
+
+	// ErrNotConsumer reports a receive on a handle that does not own the receiving end.
+	ErrNotConsumer = errors.New("ipc: handle is not the receiving end")
+
+	// ErrTooManyClaims reports that every claim slot of a ring is in use.
+	ErrTooManyClaims = errors.New("ipc: too many claims in progress")
 )
 
 // validateName rejects a name that cannot become a file name. A name reaches

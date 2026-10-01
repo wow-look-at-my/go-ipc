@@ -13,9 +13,14 @@ permissions:
   artifact-metadata: write
 
 jobs:
-  # The root go-toolchain run also covers interop/, which drives the C, C++ and Python peers. So `make native` builds and tests those first, and the action runs last with the peers in place.
+  # The root go-toolchain run also covers interop/ and codegen/go. On Linux, `make native` builds and tests the C, C++ and Python implementations and their peers first. Those implementations are Linux only, so the other hosts run the interop matrix with the Go peer alone.
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     env:
       # go-toolchain submits a dependency snapshot in CI and needs a token for it.
       GITHUB_TOKEN: ${{ github.token }}
@@ -25,20 +30,28 @@ jobs:
       GOIPC_PEER_CPP: ${{ github.workspace }}/cpp/build/goipc-peer
       GOIPC_PEER_PY: python3 -m goipc.peer
       PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}/build/gen/py
+      GOIPC_INTEROP_LANGS: ${{ runner.os == 'Linux' && 'go,c,cpp,py' || 'go' }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - run: sudo apt-get update && sudo apt-get install -y libgtest-dev jq
-      - run: pipx install uv
-      - run: make -C python interpreters
-      # Every language's generated code comes from ipcgen, so it builds first. The action sets up the build cache that a bare go-toolchain lacks in CI.
+      # Every language's generated code comes from ipcgen, so it builds first.
       - uses: wow-look-at-my/go-toolchain@master
         with:
           working-directory: ipcgen
           autorelease: false
-      - run: make native
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtest-dev jq
+      - if: runner.os == 'Linux'
+        run: pipx install uv
+      - if: runner.os == 'Linux'
+        run: make -C python interpreters
+      - if: runner.os == 'Linux'
+        run: make native
+      - if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          mkdir -p codegen/go/demo interop/internal/demo
+          ipcgen/build/ipcgen --lang go --out codegen/go/demo/demo.go spec/vectors/schema/example.ipc
+          cp codegen/go/demo/demo.go interop/internal/demo/demo.go
       - uses: wow-look-at-my/go-toolchain@master
-        with:
-          # A library has no main package, so a release has nothing to carry.
-          autorelease: false
