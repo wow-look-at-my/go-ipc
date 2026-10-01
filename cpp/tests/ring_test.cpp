@@ -262,6 +262,31 @@ TEST(Ring, UnpublishedClaimOverOldPayloadReadsNothing)
 	}
 }
 
+// A producer can store a head_cache value that is a lap old, or one that is ahead of another producer's tail.
+TEST(Ring, StaleHeadCacheDoesNotOverrunReader)
+{
+	testutil::aligned_buffer b(4608);
+	auto r = Ring::init(b.span());
+	auto drain = [&] { return r.read(SIZE_MAX, [](std::uint32_t, std::span<const std::byte>) {}); };
+	for (int i = 0; i < 4; i++) {
+		ASSERT_TRUE(r.try_write(1, std::vector<std::byte>(2040)));
+		ASSERT_TRUE(r.try_write(1, std::vector<std::byte>(2040)));
+		ASSERT_EQ(drain(), 2u);
+	}
+	ASSERT_TRUE(r.try_write(1, std::vector<std::byte>(2040)));
+	ASSERT_TRUE(r.try_write(1, std::vector<std::byte>(2040)));
+	const std::uint64_t tail = r.tail();
+	ASSERT_EQ(tail - r.head(), 4096u);
+
+	for (std::uint64_t cache : {std::uint64_t(0), tail - 4096 - 8, tail + 4096}) {
+		std::memcpy(b.data() + goipc::wire::offset::head_cache, &cache, 8);
+		EXPECT_FALSE(r.try_write(2, {})) << "head_cache " << cache;
+		EXPECT_EQ(r.tail(), tail) << "head_cache " << cache;
+	}
+	EXPECT_EQ(drain(), 2u);
+	EXPECT_TRUE(r.try_write(3, {}));
+}
+
 TEST(Ring, ManyLaps)
 {
 	testutil::aligned_buffer b(4608);

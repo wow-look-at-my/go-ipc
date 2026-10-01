@@ -360,6 +360,14 @@ private:
 			    needed);
 	}
 
+	// has_room rejects a cached head that is ahead of tail or more than a lap old.
+	static bool has_room(std::uint64_t tail, std::uint64_t head, std::uint64_t capacity, std::uint64_t need) noexcept
+	{
+		if (head > tail || tail - head > capacity)
+			return false;
+		return capacity - (tail - head) >= need;
+	}
+
 	// claim_slot runs the claim algorithm. It returns false when the ring is
 	// full, and leaves the record header holding -total and the type.
 	bool claim_slot(std::uint32_t type, std::size_t len, std::byte *&rec, std::int32_t &total)
@@ -386,9 +394,13 @@ private:
 			if (to_end < aligned)
 				need = aligned + to_end;
 
-			if (capacity - (tail - head) < need) {
+			if (!has_room(tail, head, capacity, need)) {
 				head = u64(base_, wire::offset::head).load();
-				if (capacity - (tail - head) < need)
+				// Other producers moved tail and the reader followed it since
+				// this tail was loaded.
+				if (head > tail)
+					continue;
+				if (!has_room(tail, head, capacity, need))
 					return false;
 				cache_ref.store(head);
 			}
