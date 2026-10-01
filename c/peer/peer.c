@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "goipc.h"
 
@@ -164,6 +165,213 @@ static int role_recv(const char *name, uint64_t total, uint64_t capacity)
 		free(senders[k].name);
 	free(senders);
 	free(buf);
+	return status;
+}
+
+/* A seq_check follows the sequence of each sender, as the recv role does. */
+struct seq_check {
+	struct sender *senders;
+	size_t n;
+};
+
+static void seq_free(struct seq_check *c)
+{
+	for (size_t k = 0; k < c->n; k++)
+		free(c->senders[k].name);
+	free(c->senders);
+}
+
+/* */
+static int seq_next(struct seq_check *c, uint64_t i, uint32_t type, char *buf, size_t len)
+{
+	buf[len] = '\0';
+	char *colon = memchr(buf, ':', len);
+	if (colon == NULL || strlen(buf) != len)
+		return fail("message %" PRIu64 ": payload %s has no ':'", i, buf);
+	*colon = '\0';
+	uint64_t seq;
+	if (parse_u64(colon + 1, UINT32_MAX, &seq) != 0)
+		return fail("message %" PRIu64 ": bad sequence %s", i, colon + 1);
+	if ((uint64_t)type != seq)
+		return fail("message %" PRIu64 ": type %" PRIu32 ", seq %" PRIu64, i, type, seq);
+	struct sender *s = NULL;
+	for (size_t k = 0; k < c->n; k++)
+		if (strcmp(c->senders[k].name, buf) == 0)
+			s = &c->senders[k];
+	if (s == NULL) {
+		struct sender *grown = realloc(c->senders, (c->n + 1) * sizeof *grown);
+		if (grown == NULL)
+			return fail("out of memory");
+		c->senders = grown;
+		char *dup = strdup(buf);
+		if (dup == NULL)
+			return fail("out of memory");
+		s = &c->senders[c->n++];
+		s->name = dup;
+		s->next = 0;
+	}
+	if (seq != s->next)
+		return fail("message %" PRIu64 ": sender %s sent seq %" PRIu64 ", want %" PRIu64, i, buf, seq, s->next);
+	s->next = seq + 1;
+	return 0;
+}
+
+/* ---- roles that stand in for a process that dies ---- */
+
+static int role_claim_and_die(const char *name, uint64_t length)
+{
+	goipc_queue *q;
+	int rc = goipc_queue_open(name, &q);
+	if (rc != GOIPC_OK)
+		return fail_rc("open queue", rc);
+	goipc_claim c;
+	rc = goipc_queue_claim(q, 1, (size_t)length, left_ns(), &c);
+	if (rc != GOIPC_OK)
+		return fail_rc("claim", rc);
+	memset(c.bytes, 0xAB, c.len);
+	_exit(0);
+}
+
+static int role_send_until_gone(const char *name, const char *sender)
+{
+	goipc_queue *q;
+	int rc = goipc_queue_open(name, &q);
+	if (rc != GOIPC_OK)
+		return fail_rc("open queue", rc);
+	size_t cap = strlen(sender) + 32;
+	char *payload = malloc(cap);
+	int status = payload == NULL ? fail("out of memory") : 0;
+	uint64_t sent = 0;
+	while (status == 0) {
+		if (sent > UINT32_MAX) {
+			status = fail("the receiver never went");
+			break;
+		}
+		int n = snprintf(payload, cap, "%s:%" PRIu64, sender, sent);
+		rc = goipc_queue_send(q, (uint32_t)sent, payload, (size_t)n, left_ns());
+		if (rc == GOIPC_EPEERGONE)
+			break;
+		if (rc != GOIPC_OK)
+			status = fail_rc("send", rc);
+		else
+			sent++;
+	}
+	if (status == 0 && (printf("gone %" PRIu64 "\n", sent) < 0 || fflush(stdout) != 0))
+		status = fail("write gone: %s", strerror(errno));
+	if ((rc = goipc_queue_close(q)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	goipc_queue_destroy(q);
+	free(payload);
+	return status;
+}
+
+enum stop_mode { STOP_CLOSE, STOP_EXIT };
+
+static int parse_mode(const char *s, enum stop_mode *mode)
+{
+	if (strcmp(s, "close") == 0)
+		*mode = STOP_CLOSE;
+	else if (strcmp(s, "exit") == 0)
+		*mode = STOP_EXIT;
+	else
+		return fail("mode: %s is neither close nor exit", s);
+	return 0;
+}
+
+static int role_recv_then_stop(const char *name, uint64_t count, uint64_t capacity, enum stop_mode mode)
+{
+	goipc_queue *q;
+	int rc = goipc_queue_create(name, (size_t)capacity, &q);
+	if (rc != GOIPC_OK)
+		return fail_rc("create queue", rc);
+	int status = ready();
+	size_t cap = goipc_queue_max_message_size(q);
+	char *buf = malloc(cap + 1);
+	struct seq_check check = {NULL, 0};
+	if (buf == NULL && status == 0)
+		status = fail("out of memory");
+	for (uint64_t i = 0; status == 0 && i < count; i++) {
+		uint32_t type;
+		size_t len;
+		rc = goipc_queue_recv(q, buf, cap, &type, &len, left_ns());
+		if (rc != GOIPC_OK)
+			status = fail("message %" PRIu64 " of %" PRIu64 ": %s", i, count, goipc_strerror(rc));
+		else
+			status = seq_next(&check, i, type, buf, len);
+	}
+	seq_free(&check);
+	free(buf);
+	if (status == 0 && (printf("ok %" PRIu64 "\n", count) < 0 || fflush(stdout) != 0))
+		status = fail("write ok: %s", strerror(errno));
+	if (mode == STOP_EXIT) {
+		if ((rc = goipc_queue_unlink(q)) != GOIPC_OK && status == 0)
+			status = fail_rc("unlink", rc);
+		_exit(status);
+	}
+	if ((rc = goipc_queue_close(q)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	if ((rc = goipc_queue_unlink(q)) != GOIPC_OK && status == 0)
+		status = fail_rc("unlink", rc);
+	goipc_queue_destroy(q);
+	return status;
+}
+
+static int role_chan_recv_until_gone(const char *name, uint64_t capacity, uint64_t count)
+{
+	goipc_channel *c;
+	int rc = goipc_channel_create(name, (size_t)capacity, &c);
+	if (rc != GOIPC_OK)
+		return fail_rc("create channel", rc);
+	int status = ready();
+	char buf[64], want[64];
+	uint64_t got = 0;
+	while (status == 0) {
+		uint32_t type;
+		size_t len;
+		rc = goipc_channel_recv(c, buf, sizeof buf, &type, &len, left_ns());
+		if (rc == GOIPC_EPEERGONE)
+			break;
+		if (rc != GOIPC_OK) {
+			status = fail("message %" PRIu64 ": %s", got, goipc_strerror(rc));
+			break;
+		}
+		int n = snprintf(want, sizeof want, "0:%" PRIu64, got);
+		if ((uint64_t)type != got || len != (size_t)n || memcmp(buf, want, len) != 0)
+			status = fail("message %" PRIu64 ": type %" PRIu32 " payload %.*s, want %s", got, type, (int)len, buf, want);
+		got++;
+	}
+	if (status == 0 && got != count)
+		status = fail("received %" PRIu64 " messages before peer-gone, want %" PRIu64, got, count);
+	if (status == 0 && (rc = goipc_channel_send(c, 0, "x", 1, left_ns())) != GOIPC_EPEERGONE)
+		status = fail("a send after the peer went reports %s, want peer-gone", goipc_strerror(rc));
+	if (status == 0 && (printf("ok %" PRIu64 "\n", count) < 0 || fflush(stdout) != 0))
+		status = fail("write ok: %s", strerror(errno));
+	if ((rc = goipc_channel_close(c)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	if ((rc = goipc_channel_unlink(c)) != GOIPC_OK && status == 0)
+		status = fail_rc("unlink", rc);
+	goipc_channel_destroy(c);
+	return status;
+}
+
+static int role_chan_send_then_stop(const char *name, uint64_t count, enum stop_mode mode)
+{
+	goipc_channel *c;
+	int rc = goipc_channel_open(name, &c);
+	if (rc != GOIPC_OK)
+		return fail_rc("open channel", rc);
+	int status = 0;
+	char payload[32];
+	for (uint64_t i = 0; status == 0 && i < count; i++) {
+		int n = snprintf(payload, sizeof payload, "0:%" PRIu64, i);
+		if ((rc = goipc_channel_send(c, (uint32_t)i, payload, (size_t)n, left_ns())) != GOIPC_OK)
+			status = fail_rc("send", rc);
+	}
+	if (mode == STOP_EXIT)
+		_exit(status);
+	if ((rc = goipc_channel_close(c)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	goipc_channel_destroy(c);
 	return status;
 }
 
@@ -507,6 +715,48 @@ int main(int argc, char **argv)
 		if (parse_u64(argv[3], SIZE_MAX, &a) != 0)
 			return fail("capacity: %s is not a size", argv[3]);
 		return role_typed_recv(argv[2], a);
+	}
+	if (strcmp(role, "claim-and-die") == 0) {
+		if (argc != 4)
+			return usage("claim-and-die <name> <length>");
+		if (parse_u64(argv[3], INT32_MAX, &a) != 0)
+			return fail("length: %s is not a size", argv[3]);
+		return role_claim_and_die(argv[2], a);
+	}
+	if (strcmp(role, "send-until-gone") == 0) {
+		if (argc != 4)
+			return usage("send-until-gone <name> <sender>");
+		return role_send_until_gone(argv[2], argv[3]);
+	}
+	enum stop_mode mode;
+	if (strcmp(role, "recv-then-stop") == 0) {
+		if (argc != 6)
+			return usage("recv-then-stop <name> <count> <capacity> <mode>");
+		if (parse_u64(argv[3], SIZE_MAX, &a) != 0)
+			return fail("count: %s is not a count", argv[3]);
+		if (parse_u64(argv[4], SIZE_MAX, &b) != 0)
+			return fail("capacity: %s is not a size", argv[4]);
+		if (parse_mode(argv[5], &mode) != 0)
+			return 1;
+		return role_recv_then_stop(argv[2], a, b, mode);
+	}
+	if (strcmp(role, "chan-recv-until-gone") == 0) {
+		if (argc != 5)
+			return usage("chan-recv-until-gone <name> <capacity> <count>");
+		if (parse_u64(argv[3], SIZE_MAX, &a) != 0)
+			return fail("capacity: %s is not a size", argv[3]);
+		if (parse_u64(argv[4], UINT32_MAX, &b) != 0)
+			return fail("count: %s is not a count", argv[4]);
+		return role_chan_recv_until_gone(argv[2], a, b);
+	}
+	if (strcmp(role, "chan-send-then-stop") == 0) {
+		if (argc != 5)
+			return usage("chan-send-then-stop <name> <count> <mode>");
+		if (parse_u64(argv[3], UINT32_MAX, &a) != 0)
+			return fail("count: %s is not a count", argv[3]);
+		if (parse_mode(argv[4], &mode) != 0)
+			return 1;
+		return role_chan_send_then_stop(argv[2], a, mode);
 	}
 	return fail("unknown role %s", role);
 }
