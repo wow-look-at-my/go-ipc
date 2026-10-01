@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/wow-look-at-my/go-shm"
@@ -37,21 +38,34 @@ func WithCapacity(bytes int) Option {
 	return func(c *config) { c.capacity = bytes }
 }
 
-// A Queue is a named multi-producer single-consumer message queue in shared
-// memory.
+// A Queue is a named multi-producer single-consumer message queue in shared memory.
 //
-// Any number of processes may Send. Recv has a single caller, in a single
-// process. A side that cannot proceed parks on a kernel wait. It never spins,
-// and it never sleeps for a guessed interval. A side that can proceed makes no
-// system call at all.
+// Any number of processes may Send. Only the handle CreateQueue returns may receive, and its receives run one at a time. A side that cannot proceed parks on a kernel wait. It never spins, and it never sleeps for a guessed interval. A side that can proceed makes no system call at all.
 type Queue struct {
 	name     string
+	inc      string
 	seg      *shm.SharedMemory
 	ring     *Ring
 	notEmpty *Event
 	notFull  *Event
 	cfg      config
-	owner    bool
+	self     procID
+	// lock holds the name. Only the creator has one.
+	lock *nameLock
+	// reader reports whether this handle owns the receiving end.
+	reader bool
+	recvMu sync.Mutex
+
+	slotMu sync.Mutex
+	idle   []int
+	owned  []int
+
+	peer      peerWatch
+	producers producerWatch
+	// peerErr reports why the far side of a channel is gone.
+	peerErr func() error
+	// onPeerGone runs after the receiver of this queue exits or closes.
+	onPeerGone []func()
 
 	// closing and active gate the unmap. An operation in flight holds a
 	// pointer into the segment, so Close must wait for it to leave rather
@@ -84,9 +98,16 @@ func (q *Queue) leave() {
 	}
 }
 
-// CreateQueue creates the named queue, replacing any stale instance of it. The
-// creator owns the name and should Unlink it when finished.
+// CreateQueue creates the named queue and returns its receiving end. It
+// returns ErrInUse while a live process holds the name. An instance whose
+// holder is gone is replaced.
 func CreateQueue(name string, opts ...Option) (*Queue, error) {
+	return createQueue(name, opts, false)
+}
+
+// createQueue makes a new instance of the named queue. This process reads
+// it, unless pending leaves the reader to a channel peer that connects later.
+func createQueue(name string, opts []Option, pending bool) (*Queue, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
@@ -94,35 +115,74 @@ func CreateQueue(name string, opts ...Option) (*Queue, error) {
 	if err := cfg.apply(opts); err != nil {
 		return nil, err
 	}
+	sweepStale()
 
-	q := &Queue{name: name, cfg: cfg, owner: true, drained: make(chan struct{}, 1)}
-
-	// The events come earliest and the segment last, so a peer that finds
-	// the segment also finds the events. The reverse order would hand an
-	// opener a segment whose wakeup channels do not exist yet.
-	var err error
-	if q.notEmpty, err = CreateEvent(name + ".ne"); err != nil {
-		q.unwind()
+	lock, err := lockName(name)
+	if err != nil {
 		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
 	}
-	if q.notFull, err = CreateEvent(name + ".nf"); err != nil {
-		q.unwind()
-		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
+	q := newQueue(name, cfg)
+	q.lock = lock
+	reader := q.self
+	if pending {
+		reader = pendingProc
 	}
-	if q.seg, err = shm.Create(name, RingSize(cfg.capacity)); err != nil {
-		q.unwind()
-		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
-	}
-	if q.ring, err = InitRing(q.seg.Data()); err != nil {
+	q.reader = !pending
+	if err := q.build(reader); err != nil {
 		q.unwind()
 		return nil, fmt.Errorf("ipc: create queue %q: %w", name, err)
 	}
 	return q, nil
 }
 
-// OpenQueue attaches to a queue another process created. Capacity comes from
-// the segment, so WithCapacity has no effect here.
+func newQueue(name string, cfg config) *Queue {
+	return &Queue{name: name, cfg: cfg, self: selfID(), drained: make(chan struct{}, 1)}
+}
+
+// build makes the instance while this handle holds the name. The name file
+// points at the instance only after the instance is complete.
+func (q *Queue) build(reader procID) error {
+	if old := q.lock.previous(); old != "" {
+		if err := removeInstance(q.name, old); err != nil {
+			return err
+		}
+	}
+	var err error
+	if q.inc, err = newIncarnation(); err != nil {
+		return err
+	}
+	inst := instanceName(q.name, q.inc)
+	if q.notEmpty, err = CreateEvent(inst + ".ne"); err != nil {
+		return err
+	}
+	if q.notFull, err = CreateEvent(inst + ".nf"); err != nil {
+		return err
+	}
+	if q.seg, err = shm.Create(inst, RingSize(q.cfg.capacity)); err != nil {
+		return err
+	}
+	if q.ring, err = initRing(q.seg.Data(), reader); err != nil {
+		return err
+	}
+	return q.lock.publish(q.inc)
+}
+
+// OpenQueue attaches to a queue another process created, as a sender. It
+// returns ErrPeerGone when the receiver has already exited or closed.
+// Capacity comes from the segment, so WithCapacity has no effect here.
 func OpenQueue(name string, opts ...Option) (*Queue, error) {
+	q, err := openQueue(name, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := q.checkPeer(); err != nil {
+		q.Close()
+		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
+	}
+	return q, nil
+}
+
+func openQueue(name string, opts []Option) (*Queue, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
@@ -130,27 +190,33 @@ func OpenQueue(name string, opts ...Option) (*Queue, error) {
 	if err := cfg.apply(opts); err != nil {
 		return nil, err
 	}
-
-	seg, err := shm.Open(name)
-	if err != nil {
+	q := newQueue(name, cfg)
+	var err error
+	if q.inc, err = readName(name); err != nil {
 		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
 	}
-	q := &Queue{name: name, seg: seg, cfg: cfg, drained: make(chan struct{}, 1)}
-
-	if q.ring, err = AttachRing(seg.Data()); err != nil {
-		q.unwind()
-		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
-	}
-	if q.notEmpty, err = OpenEvent(name + ".ne"); err != nil {
-		q.unwind()
-		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
-	}
-	if q.notFull, err = OpenEvent(name + ".nf"); err != nil {
+	if err := q.attach(); err != nil {
 		q.unwind()
 		return nil, fmt.Errorf("ipc: open queue %q: %w", name, err)
 	}
 	q.cfg.capacity = q.ring.Capacity()
 	return q, nil
+}
+
+func (q *Queue) attach() error {
+	inst := instanceName(q.name, q.inc)
+	var err error
+	if q.seg, err = shm.Open(inst); err != nil {
+		return err
+	}
+	if q.ring, err = AttachRing(q.seg.Data()); err != nil {
+		return err
+	}
+	if q.notEmpty, err = OpenEvent(inst + ".ne"); err != nil {
+		return err
+	}
+	q.notFull, err = OpenEvent(inst + ".nf")
+	return err
 }
 
 // unwind releases whatever a failed constructor managed to acquire.
@@ -164,12 +230,11 @@ func (q *Queue) unwind() {
 	if q.seg != nil {
 		q.seg.Close()
 	}
-	if q.owner {
-		unlinkEventImpl(q.name + ".ne")
-		unlinkEventImpl(q.name + ".nf")
-		if q.seg != nil {
-			q.seg.Unlink()
+	if q.lock != nil {
+		if q.inc != "" {
+			removeInstance(q.name, q.inc)
 		}
+		q.lock.release()
 	}
 }
 
@@ -247,11 +312,43 @@ func (q *Queue) TrySendTyped(typ uint32, payload []byte) error {
 	}
 	defer q.leave()
 
-	if err := q.ring.TryWrite(typ, payload); err != nil {
+	if err := q.write(typ, payload); err != nil {
 		return err
 	}
 	q.wakeReceiver()
 	return nil
+}
+
+// write is a single attempt to copy payload into the ring under a claim slot
+// of this process.
+func (q *Queue) write(typ uint32, payload []byte) error {
+	if err := q.checkPeer(); err != nil {
+		return err
+	}
+	slot, err := q.takeSlot()
+	if err != nil {
+		return err
+	}
+	err = q.ring.tryWrite(slot, typ, payload)
+	q.putSlot(slot)
+	return err
+}
+
+// claim is a single attempt to reserve length bytes under a claim slot of
+// this process. The slot stays with the claim until its commit or abort.
+func (q *Queue) claim(typ uint32, length int) (Claim, error) {
+	if err := q.checkPeer(); err != nil {
+		return Claim{}, err
+	}
+	slot, err := q.takeSlot()
+	if err != nil {
+		return Claim{}, err
+	}
+	c, err := q.ring.tryClaim(slot, typ, length)
+	if err != nil {
+		q.putSlot(slot)
+	}
+	return c, err
 }
 
 // Send copies payload into the queue, waiting for room if the queue is full.
@@ -268,10 +365,10 @@ func (q *Queue) SendTyped(ctx context.Context, typ uint32, payload []byte) error
 	defer q.leave()
 
 	err := park(ctx, q.notFull, &q.ring.hdr.sendWaiters, ErrFull, func() error {
-		return q.ring.TryWrite(typ, payload)
+		return q.write(typ, payload)
 	})
 	if err != nil {
-		return err
+		return q.sawPeerGone(err)
 	}
 	q.wakeReceiver()
 	return nil
@@ -291,11 +388,11 @@ func (q *Queue) Claim(ctx context.Context, typ uint32, length int) (Claim, error
 	var c Claim
 	err := park(ctx, q.notFull, &q.ring.hdr.sendWaiters, ErrFull, func() error {
 		var err error
-		c, err = q.ring.TryClaim(typ, length)
+		c, err = q.claim(typ, length)
 		return err
 	})
 	if err != nil {
-		return Claim{}, err
+		return Claim{}, q.sawPeerGone(err)
 	}
 	return c, nil
 }
@@ -311,6 +408,7 @@ func (q *Queue) Commit(c Claim) {
 	defer q.leave()
 
 	c.Commit()
+	q.putSlot(c.slot)
 	q.wakeReceiver()
 }
 
@@ -325,6 +423,7 @@ func (q *Queue) Abort(c Claim) {
 	// the receiver can step over. Waking the receiver is what eventually
 	// returns the space to the senders.
 	c.Abort()
+	q.putSlot(c.slot)
 	q.wakeReceiver()
 }
 
@@ -333,19 +432,36 @@ func (q *Queue) Abort(c Claim) {
 // Padding that a sender aborted frees space without producing a message, so
 // the space has to be announced even when the read delivers nothing. Without
 // that, a sender parked behind an aborted claim never wakes.
+//
+// A read that finds a claim in its way checks the claim's producer. A dead
+// producer's claim becomes padding, and the read runs again.
 func (q *Queue) receive(limit int, fn ReadFunc) (int, error) {
-	before := q.ring.hdr.head.Load()
-	n, err := q.ring.Read(limit, fn)
-	if q.ring.hdr.head.Load() != before {
-		q.wakeSenders()
+	// The peer check comes before the read.
+	var gone error
+	if q.peerErr != nil {
+		gone = q.peerErr()
 	}
-	if err != nil {
-		return n, err
+	for {
+		before := q.ring.hdr.head.Load()
+		n, err := q.ring.Read(limit, fn)
+		if q.ring.hdr.head.Load() != before {
+			q.wakeSenders()
+		}
+		if err != nil || n > 0 {
+			return n, err
+		}
+		reclaimed, err := q.unstall()
+		if err != nil {
+			return 0, err
+		}
+		if !reclaimed {
+			break
+		}
 	}
-	if n == 0 {
-		return 0, ErrEmpty
+	if gone != nil {
+		return 0, gone
 	}
-	return n, nil
+	return 0, ErrEmpty
 }
 
 // recvOne copies the next message into dst through the shared read path.
@@ -378,6 +494,11 @@ func (q *Queue) TryRecv(dst []byte) (uint32, []byte, error) {
 		return 0, nil, ErrClosed
 	}
 	defer q.leave()
+	if !q.reader {
+		return 0, nil, ErrNotConsumer
+	}
+	q.recvMu.Lock()
+	defer q.recvMu.Unlock()
 
 	return q.recvOne(dst)
 }
@@ -396,6 +517,11 @@ func (q *Queue) RecvInto(ctx context.Context, dst []byte) (uint32, []byte, error
 		return 0, nil, ErrClosed
 	}
 	defer q.leave()
+	if !q.reader {
+		return 0, nil, ErrNotConsumer
+	}
+	q.recvMu.Lock()
+	defer q.recvMu.Unlock()
 
 	var (
 		typ uint32
@@ -425,6 +551,11 @@ func (q *Queue) ReadBatch(ctx context.Context, limit int, fn ReadFunc) (int, err
 		return 0, ErrClosed
 	}
 	defer q.leave()
+	if !q.reader {
+		return 0, ErrNotConsumer
+	}
+	q.recvMu.Lock()
+	defer q.recvMu.Unlock()
 
 	var count int
 	err := park(ctx, q.notEmpty, &q.ring.hdr.recvWaiters, ErrEmpty, func() error {
@@ -449,8 +580,16 @@ func (q *Queue) Close() error {
 		return ErrClosed
 	}
 
-	// Closing the events releases whatever is parked on them, which is what
-	// lets the in-flight count fall to empty.
+	// The receiving end goes first, so a sender parked on a full queue
+	// wakes and finds nobody left to drain it.
+	if q.reader {
+		q.ring.hdr.consumer.CompareAndSwap(uint64(q.self), uint64(noProc))
+		q.wakeSenders()
+	}
+	q.peer.stop()
+	q.producers.stop()
+
+	// Closing the events releases whatever is parked on them, which is what lets the in-flight count fall to empty.
 	err := q.notEmpty.Close()
 	if cerr := q.notFull.Close(); err == nil {
 		err = cerr
@@ -459,8 +598,20 @@ func (q *Queue) Close() error {
 		<-q.drained
 	}
 
+	q.slotMu.Lock()
+	for _, slot := range q.owned {
+		q.ring.dropSlot(q.self, slot)
+	}
+	q.owned, q.idle = nil, nil
+	q.slotMu.Unlock()
+
 	if cerr := q.seg.Close(); err == nil {
 		err = cerr
+	}
+	if q.lock != nil {
+		if cerr := q.lock.release(); err == nil {
+			err = cerr
+		}
 	}
 	return err
 }
@@ -468,11 +619,8 @@ func (q *Queue) Close() error {
 // Unlink removes the queue's name so no further process can open it. Handles
 // already open stay usable until they close.
 func (q *Queue) Unlink() error {
-	err := q.seg.Unlink()
-	if uerr := unlinkEventImpl(q.name + ".ne"); err == nil {
-		err = uerr
-	}
-	if uerr := unlinkEventImpl(q.name + ".nf"); err == nil {
+	err := removeInstance(q.name, q.inc)
+	if uerr := unlinkName(q.name, q.inc); err == nil {
 		err = uerr
 	}
 	return err

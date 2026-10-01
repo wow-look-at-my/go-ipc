@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +52,20 @@ func runChild(role, name, count string) error {
 		return childSender(ctx, name, n)
 	case "echo":
 		return childEcho(ctx, name)
+	case "abandon":
+		return childAbandon(ctx, name)
+	case "hold":
+		return childHold(ctx, name)
+	case "consumer":
+		return childConsumer(name)
+	case "peer":
+		return childPeer(ctx, name)
+	case "ident":
+		if _, err := fmt.Println(uint64(selfID())); err != nil {
+			return err
+		}
+		_, err := io.Copy(io.Discard, os.Stdin)
+		return err
 	default:
 		return fmt.Errorf("unknown role %q", role)
 	}
@@ -84,6 +100,131 @@ func childEcho(ctx context.Context, name string) error {
 		return err
 	}
 	return nil
+}
+
+// childAbandon claims room in the queue and exits without a commit.
+func childAbandon(ctx context.Context, name string) error {
+	q, err := OpenQueue(name)
+	if err != nil {
+		return err
+	}
+	c, err := q.Claim(ctx, 5, 64)
+	if err != nil {
+		return err
+	}
+	copy(c.Bytes, "never committed")
+	os.Exit(0)
+	return nil
+}
+
+// childHold claims room in the queue, reports that, and waits to be killed.
+func childHold(ctx context.Context, name string) error {
+	q, err := OpenQueue(name)
+	if err != nil {
+		return err
+	}
+	if _, err := q.Claim(ctx, 5, 64); err != nil {
+		return err
+	}
+	return readyThenWait()
+}
+
+// childConsumer creates a queue it never reads, and waits to be killed.
+func childConsumer(name string) error {
+	if _, err := CreateQueue(name, WithCapacity(MinCapacity)); err != nil {
+		return err
+	}
+	return readyThenWait()
+}
+
+// childPeer connects to a channel, sends a single message, and waits. When
+// its stdin closes it exits without a Close.
+func childPeer(ctx context.Context, name string) error {
+	ch, err := OpenChannel(name)
+	if err != nil {
+		return err
+	}
+	if err := ch.Send(ctx, []byte("hello")); err != nil {
+		return err
+	}
+	if err := readyThenWait(); err != nil {
+		return err
+	}
+	os.Exit(0)
+	return nil
+}
+
+func readyThenWait() error {
+	if _, err := fmt.Println("ready"); err != nil {
+		return err
+	}
+	_, err := io.Copy(io.Discard, os.Stdin)
+	return err
+}
+
+// startPeer starts a child in the given role and waits for it to report
+// ready. Closing the returned pipe lets the child go on.
+func startPeer(t *testing.T, role, name string) (*exec.Cmd, io.WriteCloser) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), childRoleEnv+"="+role, childNameEnv+"="+name)
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err, "child %s never reported ready", role)
+	require.Equal(t, "ready\n", line)
+	return cmd, stdin
+}
+
+// kill ends a child and reaps it, so its exit is final when kill returns.
+func kill(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	require.NoError(t, cmd.Process.Kill())
+	cmd.Wait()
+}
+
+// startIdent starts a child that reports its procID and then waits. Closing
+// the returned pipe lets it exit.
+func startIdent(t *testing.T) (*exec.Cmd, procID, io.WriteCloser) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), childRoleEnv+"=ident")
+	cmd.Stderr = os.Stderr
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	})
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	raw, err := strconv.ParseUint(strings.TrimSpace(line), 10, 64)
+	require.NoError(t, err)
+	id := procID(raw)
+	require.True(t, id.watchable(), "the child has no life socket")
+	require.False(t, isDead(id))
+	return cmd, id, stdin
+}
+
+// deadProcID returns the procID of a process that has exited.
+func deadProcID(t *testing.T) procID {
+	t.Helper()
+	cmd, id, stdin := startIdent(t)
+	stdin.Close()
+	require.NoError(t, cmd.Wait())
+	require.True(t, isDead(id))
+	return id
 }
 
 // startChild re-executes this binary in the given role.
