@@ -54,26 +54,26 @@ gen: $(IPCGEN)
 
 # The Go modules that use generated code take a copy, which git ignores.
 prepare-go: gen
-	$(SUBMAKE) -C codegen prepare
-	$(SUBMAKE) -C interop prepare
+	+$(SUBMAKE) -C codegen prepare
+	+$(SUBMAKE) -C interop prepare
 
 build-c: gen
-	$(SUBMAKE) -C c build
+	+$(SUBMAKE) -C c build
 
 build-cpp: gen
-	$(SUBMAKE) -C cpp build
+	+$(SUBMAKE) -C cpp build
 
 test-c: gen
-	$(SUBMAKE) -C c test
+	+$(SUBMAKE) -C c test
 
 test-cpp: gen
-	$(SUBMAKE) -C cpp test
+	+$(SUBMAKE) -C cpp test
 
 test-py: build-c gen
-	$(SUBMAKE) -C python test
+	+$(SUBMAKE) -C python test
 
 test-codegen: gen
-	$(SUBMAKE) -C codegen test
+	+$(SUBMAKE) -C codegen test
 
 clean:
 	$(MAKE) -C c clean
