@@ -130,8 +130,8 @@ class Queue(_Handle):
 		return claim(
 			self,
 			lambda out: cdll.goipc_queue_claim(q, type, length, ns, out),
-			lambda c: cdll.goipc_queue_commit(q, c),
-			lambda c: cdll.goipc_queue_abort(q, c),
+			lambda c: _util.check(cdll.goipc_queue_commit(q, c)),
+			lambda c: _util.check(cdll.goipc_queue_abort(q, c)),
 		)
 
 	def try_recv(self) -> Tuple[int, bytes]:
