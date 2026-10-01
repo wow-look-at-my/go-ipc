@@ -39,10 +39,9 @@ class _Reader:
 		view = _util.view_at(payload or 0, length, writable=False)
 		try:
 			self.fn(type_, view)
+			view.release()
 		except BaseException as exc:
 			self.error = exc
-		finally:
-			view.release()
 
 	def finish(self) -> None:
 		"""Raises the callback's exception, if any, once the C call has returned."""
