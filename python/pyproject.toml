@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "goipc"
+version = "0.1.0"
+description = "Shared-memory IPC compatible with go-ipc, over libgoipc"
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.setuptools]
+packages = ["goipc"]
+
+[tool.setuptools.package-data]
+goipc = ["py.typed"]
