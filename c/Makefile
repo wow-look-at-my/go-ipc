@@ -8,6 +8,13 @@ SPEC := $(abspath ../spec)
 B := $(ROOT)/build
 GEN := $(B)/gen
 
+# The typed peer roles use the ipcgen output for spec/vectors/schema/example.ipc.
+# The top-level Makefile passes both; these defaults are the paths it uses.
+GEN_DIR ?= $(abspath ../build/gen)
+IPCGEN ?= $(abspath ../ipcgen/build/ipcgen)
+SCHEMA_DIR := $(SPEC)/vectors/schema
+PEER_GEN := $(B)/peer
+
 SRC := $(wildcard src/*.c)
 TEST_SRC := $(wildcard tests/*.c)
 HEADERS := $(wildcard include/*.h src/*.h tests/*.h) $(GEN)/spec_wire.h
@@ -62,8 +69,26 @@ $(B)/libgoipc.a: $(LIB_OBJ)
 	rm -f $@
 	$(AR) rcs $@ $^
 
-$(B)/goipc-peer: peer/peer.c $(B)/libgoipc.a include/goipc.h
-	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ peer/peer.c $(B)/libgoipc.a
+# These two rules run only when the file is missing, and then they fail with the reason.
+$(GEN_DIR)/c/demo.h:
+	@echo "c: $@ is missing; GEN_DIR=$(GEN_DIR) must hold the ipcgen output (run make gen at the top level)" >&2; exit 1
+
+$(IPCGEN):
+	@echo "c: IPCGEN=$(IPCGEN) does not exist; it must name the ipcgen binary (run make ipcgen at the top level)" >&2; exit 1
+
+$(PEER_GEN)/schema.json: $(SCHEMA_DIR)/example.ipc $(IPCGEN)
+	@mkdir -p $(@D)
+	$(IPCGEN) --lang json --out $@ $<
+
+$(PEER_GEN)/fixture.h: $(PEER_GEN)/schema.json ../codegen/fixture.jq $(SCHEMA_DIR)/values.json $(SCHEMA_DIR)/invalid.json
+	$(JQ) -r --arg lang c --slurpfile schema $< --slurpfile invalid $(SCHEMA_DIR)/invalid.json \
+		-f ../codegen/fixture.jq $(SCHEMA_DIR)/values.json > $@.tmp && mv $@.tmp $@
+
+$(PEER_GEN)/messages.h: $(PEER_GEN)/schema.json peer/messages.jq
+	$(JQ) -r -f peer/messages.jq $< > $@.tmp && mv $@.tmp $@
+
+$(B)/goipc-peer: peer/peer.c $(B)/libgoipc.a include/goipc.h $(GEN_DIR)/c/demo.h $(PEER_GEN)/fixture.h $(PEER_GEN)/messages.h
+	$(CC) $(CPPFLAGS) -I$(GEN_DIR)/c -I$(PEER_GEN) $(CFLAGS) -o $@ peer/peer.c $(B)/libgoipc.a
 
 $(B)/tests: $(TEST_OBJ) $(LIB_OBJ)
 	$(CC) -pthread -o $@ $^ -ldl

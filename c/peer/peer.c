@@ -12,6 +12,23 @@
 
 #include "goipc.h"
 
+#include "demo.h"
+#include "messages.h"
+
+/* fixture.h builds each values.json entry. Its check functions are unused here. */
+static int eq_mem(const void *a, size_t an, const void *b, size_t bn)
+{
+	return an == bn && (an == 0 || memcmp(a, b, an) == 0);
+}
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#include "fixture.h"
+/* T##_peer_type is the type ID of the C type T. A message absent from values.json leaves one unused. */
+#pragma GCC diagnostic ignored "-Wunused-const-variable"
+#define PEER_TYPE_ID(T, id) static const uint32_t T##_peer_type = id;
+PEER_MESSAGES(PEER_TYPE_ID)
+#pragma GCC diagnostic pop
+
 #define PEER_TIMEOUT_NS (INT64_C(60) * 1000000000)
 
 static struct timespec started;
@@ -292,6 +309,150 @@ out:
 	return status;
 }
 
+/* FX_CASE in role_typed_send encodes one values.json entry and sends it. */
+#define FX_CASE(idx, T)                                                                                       \
+	if (status == 0) {                                                                                    \
+		T v;                                                                                          \
+		fx_build_##idx(&v);                                                                           \
+		size_t n = T##_size(&v);                                                                      \
+		uint8_t *buf = malloc(n > 0 ? n : 1);                                                         \
+		if (buf == NULL)                                                                              \
+			status = fail("out of memory");                                                       \
+		else if (T##_encode(&v, buf, n) != n)                                                         \
+			status = fail("entry %d: " #T "_encode does not write %zu bytes", idx, n);            \
+		else if ((rc = goipc_queue_send(q, T##_peer_type, buf, n, left_ns())) != GOIPC_OK)            \
+			status = fail_rc("send entry " #idx, rc);                                             \
+		free(buf);                                                                                    \
+	}
+
+static int role_typed_send(const char *name)
+{
+	goipc_queue *q;
+	int rc = goipc_queue_open(name, &q);
+	if (rc != GOIPC_OK)
+		return fail_rc("open queue", rc);
+	int status = 0;
+	FX_CASES
+	if ((rc = goipc_queue_close(q)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	goipc_queue_destroy(q);
+	return status;
+}
+#undef FX_CASE
+
+/* reencode decodes in with the decoder for type, then encodes the result into *out. */
+static int reencode(uint32_t type, const uint8_t *in, size_t len, uint8_t **out, size_t *out_len)
+{
+	switch (type) {
+#define PEER_REENCODE(T, id)                                                                                  \
+	case id: {                                                                                            \
+		T m;                                                                                          \
+		int rc = T##_decode(&m, in, len);                                                             \
+		if (rc != 0)                                                                                  \
+			return fail(#T "_decode fails with %d", rc);                                          \
+		size_t n = T##_size(&m);                                                                      \
+		*out = malloc(n > 0 ? n : 1);                                                                 \
+		if (*out == NULL)                                                                             \
+			return fail("out of memory");                                                         \
+		*out_len = T##_encode(&m, *out, n);                                                           \
+		if (*out_len != n)                                                                            \
+			return fail(#T "_encode does not write %zu bytes", n);                                \
+		return 0;                                                                                     \
+	}
+		PEER_MESSAGES(PEER_REENCODE)
+#undef PEER_REENCODE
+	}
+	return fail("no message has type ID %" PRIu32, type);
+}
+
+static int read_file(const char *path, uint8_t **out, size_t *len)
+{
+	FILE *f = fopen(path, "rb");
+	if (f == NULL)
+		return fail("open %s: %s", path, strerror(errno));
+	size_t cap = 256, n = 0;
+	uint8_t *buf = malloc(cap);
+	while (buf != NULL) {
+		n += fread(buf + n, 1, cap - n, f);
+		if (n < cap)
+			break;
+		uint8_t *grown = realloc(buf, cap * 2);
+		if (grown == NULL)
+			free(buf);
+		buf = grown;
+		cap *= 2;
+	}
+	int err = ferror(f);
+	fclose(f);
+	if (buf == NULL)
+		return fail("out of memory");
+	if (err) {
+		free(buf);
+		return fail("read %s", path);
+	}
+	*out = buf;
+	*len = n;
+	return 0;
+}
+
+/* typed_entry receives entry idx and requires its re-encoding to equal <idx>.bin. */
+static int typed_entry(goipc_queue *q, uint8_t *buf, size_t cap, const char *spec, int idx, uint32_t want_type)
+{
+	uint32_t type;
+	size_t len;
+	int rc = goipc_queue_recv(q, buf, cap, &type, &len, left_ns());
+	if (rc != GOIPC_OK)
+		return fail("entry %d: %s", idx, goipc_strerror(rc));
+	if (type != want_type)
+		return fail("entry %d: type %" PRIu32 ", want %" PRIu32, idx, type, want_type);
+	char path[4096];
+	snprintf(path, sizeof path, "%s/vectors/schema/%d.bin", spec, idx);
+	uint8_t *want = NULL, *got = NULL;
+	size_t want_len = 0, got_len = 0;
+	int status = read_file(path, &want, &want_len);
+	if (status == 0 && reencode(type, buf, len, &got, &got_len) != 0)
+		status = fail("entry %d: cannot re-encode", idx);
+	if (status == 0 && (got_len != want_len || (want_len > 0 && memcmp(got, want, want_len) != 0)))
+		status = fail("entry %d: re-encoding differs from %s", idx, path);
+	free(want);
+	free(got);
+	return status;
+}
+
+#define FX_CASE(idx, T)                                                                                       \
+	if (status == 0) {                                                                                    \
+		status = typed_entry(q, buf, cap, spec, idx, T##_peer_type);                                  \
+		count++;                                                                                      \
+	}
+
+static int role_typed_recv(const char *name, uint64_t capacity)
+{
+	const char *spec = getenv("GOIPC_SPEC_DIR");
+	if (spec == NULL || *spec == '\0')
+		return fail("GOIPC_SPEC_DIR is not set; it must name the spec directory");
+	goipc_queue *q;
+	int rc = goipc_queue_create(name, (size_t)capacity, &q);
+	if (rc != GOIPC_OK)
+		return fail_rc("create queue", rc);
+	int status = ready();
+	size_t cap = goipc_queue_max_message_size(q);
+	uint8_t *buf = malloc(cap > 0 ? cap : 1);
+	int count = 0;
+	if (buf == NULL)
+		status = fail("out of memory");
+	FX_CASES
+	if (status == 0 && (printf("ok %d\n", count) < 0 || fflush(stdout) != 0))
+		status = fail("write ok: %s", strerror(errno));
+	if ((rc = goipc_queue_close(q)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	if ((rc = goipc_queue_unlink(q)) != GOIPC_OK && status == 0)
+		status = fail_rc("unlink", rc);
+	goipc_queue_destroy(q);
+	free(buf);
+	return status;
+}
+#undef FX_CASE
+
 static int usage(const char *u)
 {
 	return fail("usage: %s", u);
@@ -334,6 +495,18 @@ int main(int argc, char **argv)
 		if (parse_u64(argv[3], SIZE_MAX - 1, &a) != 0)
 			return fail("bytes: %s is not a size", argv[3]);
 		return role_dial_check(argv[2], a);
+	}
+	if (strcmp(role, "typed-send") == 0) {
+		if (argc != 3)
+			return usage("typed-send <name>");
+		return role_typed_send(argv[2]);
+	}
+	if (strcmp(role, "typed-recv") == 0) {
+		if (argc != 4)
+			return usage("typed-recv <name> <capacity>");
+		if (parse_u64(argv[3], SIZE_MAX, &a) != 0)
+			return fail("capacity: %s is not a size", argv[3]);
+		return role_typed_recv(argv[2], a);
 	}
 	return fail("unknown role %s", role);
 }
