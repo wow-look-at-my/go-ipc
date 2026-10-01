@@ -21,11 +21,14 @@ import (
 )
 
 const (
-	langsEnv     = "GOIPC_INTEROP_LANGS"
-	capacity     = 4096
-	queueCount   = 3000
-	mpscCount    = 2000
-	streamBytes  = 300000
+	langsEnv    = "GOIPC_INTEROP_LANGS"
+	capacity    = 4096
+	queueCount  = 3000
+	mpscCount   = 2000
+	streamBytes = 300000
+	// recoverCount keeps the claims of the recover cell at the cursors that spec/peer.md lists.
+	recoverCount = 200
+	goneCount    = 500
 	readyTimeout = 30 * time.Second
 	cellTimeout  = 120 * time.Second
 )
@@ -292,6 +295,78 @@ func TestInterop(t *testing.T) {
 					runCell(t, listen, []*proc{dial}, "")
 					requireNoLeftovers(t, name)
 				})
+			}
+		}
+	})
+
+	t.Run("recover", func(t *testing.T) {
+		for _, rl := range ls {
+			for _, cl := range ls {
+				t.Run(cl+"->"+rl, func(t *testing.T) {
+					t.Parallel()
+					ctx := cellContext(t)
+					name := endpointName(t, "recover")
+					recv := startPeer(t, ctx, rl, "recv", name, strconv.Itoa(2*recoverCount), strconv.Itoa(capacity))
+					recv.waitReady(t)
+					steps := [][]string{
+						{cl, "claim-and-die", name, "64"},
+						{cl, "send", name, "0", strconv.Itoa(recoverCount)},
+						{cl, "claim-and-die", name, "1500"},
+						{rl, "send", name, "1", strconv.Itoa(recoverCount)},
+					}
+					var done []*proc
+					for _, step := range steps {
+						p := startPeer(t, ctx, step[0], step[1:]...)
+						done = append(done, p)
+						if p.wait() != nil {
+							break
+						}
+					}
+					runCell(t, recv, done, fmt.Sprintf("ok %d", 2*recoverCount))
+					requireNoLeftovers(t, name)
+				})
+			}
+		}
+	})
+
+	t.Run("receiver-gone", func(t *testing.T) {
+		for _, mode := range []string{"close", "exit"} {
+			for _, rl := range ls {
+				for _, sl := range ls {
+					t.Run(mode+"/"+sl+"->"+rl, func(t *testing.T) {
+						t.Parallel()
+						ctx := cellContext(t)
+						name := endpointName(t, "gone")
+						recv := startPeer(t, ctx, rl, "recv-then-stop", name, strconv.Itoa(goneCount), strconv.Itoa(capacity), mode)
+						recv.waitReady(t)
+						send := startPeer(t, ctx, sl, "send-until-gone", name, "0")
+						runCell(t, recv, []*proc{send}, fmt.Sprintf("ok %d", goneCount))
+						require.Len(t, send.lines, 1, "sender stdout\n%s", send.report())
+						sent, err := strconv.Atoi(strings.TrimPrefix(send.lines[0], "gone "))
+						require.NoError(t, err, "sender stdout\n%s", send.report())
+						assert.GreaterOrEqual(t, sent, goneCount, "the sender saw peer-gone before the receiver took its messages")
+						requireNoLeftovers(t, name)
+					})
+				}
+			}
+		}
+	})
+
+	t.Run("channel-peer-gone", func(t *testing.T) {
+		for _, mode := range []string{"close", "exit"} {
+			for _, ll := range ls {
+				for _, dl := range ls {
+					t.Run(mode+"/"+dl+"->"+ll, func(t *testing.T) {
+						t.Parallel()
+						ctx := cellContext(t)
+						name := endpointName(t, "changone")
+						recv := startPeer(t, ctx, ll, "chan-recv-until-gone", name, strconv.Itoa(capacity), strconv.Itoa(goneCount))
+						recv.waitReady(t)
+						send := startPeer(t, ctx, dl, "chan-send-then-stop", name, strconv.Itoa(goneCount), mode)
+						runCell(t, recv, []*proc{send}, fmt.Sprintf("ok %d", goneCount))
+						requireNoLeftovers(t, name)
+					})
+				}
 			}
 		}
 	})

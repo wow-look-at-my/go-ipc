@@ -84,6 +84,55 @@ func runPeer(args []string) error {
 			return fmt.Errorf("capacity: %w", err)
 		}
 		return peerTypedRecv(ctx, rest[0], capacity)
+	case "claim-and-die":
+		if len(rest) != 2 {
+			return errors.New("usage: claim-and-die <name> <length>")
+		}
+		length, err := strconv.Atoi(rest[1])
+		if err != nil {
+			return fmt.Errorf("length: %w", err)
+		}
+		return peerClaimAndDie(ctx, rest[0], length)
+	case "send-until-gone":
+		if len(rest) != 2 {
+			return errors.New("usage: send-until-gone <name> <sender>")
+		}
+		return peerSendUntilGone(ctx, rest[0], rest[1])
+	case "recv-then-stop":
+		if len(rest) != 4 {
+			return errors.New("usage: recv-then-stop <name> <count> <capacity> <close|exit>")
+		}
+		count, err := strconv.Atoi(rest[1])
+		if err != nil {
+			return fmt.Errorf("count: %w", err)
+		}
+		capacity, err := strconv.Atoi(rest[2])
+		if err != nil {
+			return fmt.Errorf("capacity: %w", err)
+		}
+		return peerRecvThenStop(ctx, rest[0], count, capacity, rest[3])
+	case "chan-recv-until-gone":
+		if len(rest) != 3 {
+			return errors.New("usage: chan-recv-until-gone <name> <capacity> <count>")
+		}
+		capacity, err := strconv.Atoi(rest[1])
+		if err != nil {
+			return fmt.Errorf("capacity: %w", err)
+		}
+		count, err := strconv.Atoi(rest[2])
+		if err != nil {
+			return fmt.Errorf("count: %w", err)
+		}
+		return peerChanRecvUntilGone(ctx, rest[0], capacity, count)
+	case "chan-send-then-stop":
+		if len(rest) != 3 {
+			return errors.New("usage: chan-send-then-stop <name> <count> <close|exit>")
+		}
+		count, err := strconv.Atoi(rest[1])
+		if err != nil {
+			return fmt.Errorf("count: %w", err)
+		}
+		return peerChanSendThenStop(ctx, rest[0], count, rest[2])
 	default:
 		return fmt.Errorf("unknown role %q", role)
 	}
@@ -106,7 +155,16 @@ func peerRecv(ctx context.Context, name string, total, capacity int) error {
 	if err := ready(); err != nil {
 		return err
 	}
+	if err := receiveChecked(ctx, q, total); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(os.Stdout, "ok %d\n", total)
+	return err
+}
 
+// receiveChecked receives total messages of the form the send role writes, and
+// checks the order of each sender.
+func receiveChecked(ctx context.Context, q *ipc.Queue, total int) error {
 	next := map[string]uint64{}
 	buf := make([]byte, q.MaxMessageSize())
 	for i := 0; i < total; i++ {
@@ -130,8 +188,7 @@ func peerRecv(ctx context.Context, name string, total, capacity int) error {
 		}
 		next[sender] = seq + 1
 	}
-	_, err = fmt.Fprintf(os.Stdout, "ok %d\n", total)
-	return err
+	return nil
 }
 
 func peerSend(ctx context.Context, name, sender string, count int) error {
