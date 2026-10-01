@@ -2,6 +2,8 @@
 #include <map>
 #include <string>
 
+#include <sys/stat.h>
+
 #include <gtest/gtest.h>
 
 #include <goipc/goipc.hpp>
@@ -17,10 +19,24 @@ namespace wire = goipc::wire;
 
 TEST(Wire, ConstantsMatchSpec)
 {
-	EXPECT_EQ(spec::spec_version, 1u);
+	EXPECT_EQ(spec::spec_version, 2u);
 	EXPECT_EQ(wire::ring_magic, spec::ring_magic);
 	EXPECT_EQ(wire::ring_version, spec::ring_version);
 	EXPECT_EQ(wire::header_size, spec::header_size);
+	EXPECT_EQ(wire::control_size, spec::control_size);
+	EXPECT_EQ(wire::offset::slots, spec::slots_offset);
+	EXPECT_EQ(wire::claim_slots, spec::slot_count);
+	EXPECT_EQ(wire::slot_size, spec::slot_size);
+	EXPECT_EQ(wire::no_intent, spec::no_intent);
+	EXPECT_EQ(wire::consumer_none, spec::proc_none);
+	EXPECT_EQ(wire::consumer_pending, spec::proc_pending);
+	EXPECT_EQ(wire::proc_watchable, std::uint64_t(1) << spec::proc_watchable_bit);
+	EXPECT_EQ(wire::proc_any, std::uint64_t(1) << spec::proc_always_set_bit);
+	EXPECT_EQ(wire::runtime_dir, spec::runtime_dir);
+	EXPECT_EQ(spec::file_mode, "0600");
+	EXPECT_EQ(wire::incarnation_len, spec::instance_id_hex_digits);
+	EXPECT_EQ(spec::life_socket_procid_hex_digits, 16u);
+	EXPECT_EQ(spec::life_socket_temp_suffix, ".tmp");
 	EXPECT_EQ(wire::cache_line, spec::cache_line);
 	EXPECT_EQ(wire::min_capacity, spec::min_capacity);
 	EXPECT_EQ(wire::record_header_size, spec::record_header_size);
@@ -38,13 +54,56 @@ TEST(Wire, ConstantsMatchSpec)
 
 TEST(Wire, PathsMatchSpec)
 {
-	auto expand = [](std::string_view pattern, std::string_view name) {
+	auto expand = [](std::string_view pattern, std::string_view key, std::string_view value,
+			 std::string_view key2 = {}, std::string_view value2 = {}) {
 		std::string s(pattern);
-		s.replace(s.find("{name}"), 6, name);
+		s.replace(s.find(key), key.size(), value);
+		if (!key2.empty())
+			s.replace(s.find(key2), key2.size(), value2);
 		return s;
 	};
-	EXPECT_EQ(goipc::detail::segment_path("q1"), expand(spec::segment_path, "q1"));
-	EXPECT_EQ(goipc::detail::event_path("q1.ne"), expand(spec::event_path, "q1.ne"));
+	namespace d = goipc::detail;
+	const std::string id = "0123456789abcdef";
+	const std::string inst = d::instance_name("q1", id);
+	EXPECT_EQ(d::name_path("q1"), expand(spec::name_file, "{name}", "q1"));
+	EXPECT_EQ(d::inc_path("q1"), expand(spec::instance_file, "{name}", "q1"));
+	EXPECT_EQ(d::segment_path(inst), expand(spec::segment_path, "{name}", "q1", "{id}", id));
+	EXPECT_EQ(d::event_path(inst + ".ne"), expand(spec::not_empty_event, "{name}", "q1", "{id}", id));
+	EXPECT_EQ(d::event_path(inst + ".nf"), expand(spec::not_full_event, "{name}", "q1", "{id}", id));
+	EXPECT_EQ(d::event_path("ev"), expand(spec::event_path, "{event}", "ev"));
+	EXPECT_EQ(d::life_path(0xC000000000000abcull), expand(spec::life_socket, "{procid}", "c000000000000abc"));
+	EXPECT_EQ(d::life_path(0x42), expand(spec::life_socket, "{procid}", "0000000000000042"));
+}
+
+TEST(Wire, SlotFieldsMatchSpec)
+{
+	const std::map<std::string, std::pair<std::size_t, std::size_t>> ours = {
+		{"owner", {wire::offset::slot_owner, 8}},
+		{"at", {wire::offset::slot_at, 8}},
+		{"size", {wire::offset::slot_claim_size, 8}},
+	};
+	EXPECT_EQ(std::size(spec::slot_fields), ours.size());
+	for (const auto &f : spec::slot_fields) {
+		auto it = ours.find(std::string(f.name));
+		ASSERT_NE(it, ours.end()) << "spec slot field " << f.name << " is unknown here";
+		EXPECT_EQ(it->second.first, f.offset) << f.name;
+		EXPECT_EQ(it->second.second, f.size) << f.name;
+	}
+}
+
+TEST(Wire, ProcIDBits)
+{
+	std::uint64_t id = goipc::detail::self_id();
+	EXPECT_NE(id & wire::proc_any, 0u);
+	if (goipc::detail::self_error() == 0) {
+		EXPECT_TRUE(goipc::detail::watchable(id));
+		EXPECT_TRUE(testutil::file_exists(goipc::detail::life_path(id)));
+		EXPECT_FALSE(testutil::file_exists(goipc::detail::life_path(id) + ".tmp"));
+		struct stat st;
+		ASSERT_EQ(::stat(goipc::detail::life_path(id).c_str(), &st), 0);
+		EXPECT_TRUE(S_ISSOCK(st.st_mode));
+		EXPECT_EQ(st.st_mode & 0777, 0600u);
+	}
 }
 
 TEST(Wire, FieldOffsetsMatchSpec)

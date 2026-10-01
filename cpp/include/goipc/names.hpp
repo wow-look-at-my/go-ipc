@@ -219,8 +219,9 @@ inline std::string read_name(std::string_view name)
 	std::string inc = read_small(inc_path(name), err);
 	if (err)
 		throw_errno(err, "goipc: read " + inc_path(name));
+	// Not-ready is EAGAIN, so a caller can tell it from a missing name.
 	if (!parse_incarnation(inc))
-		throw_errno(ENOENT, "goipc: endpoint \"" + std::string(name) + "\" is not ready");
+		throw_errno(EAGAIN, "goipc: endpoint \"" + std::string(name) + "\" is not ready");
 	return inc;
 }
 

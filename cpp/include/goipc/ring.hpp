@@ -79,7 +79,8 @@ class Claim {
 public:
 	Claim() = default;
 	Claim(Claim &&o) noexcept
-		: rec_(std::exchange(o.rec_, nullptr)), total_(o.total_), slot_(o.slot_), sink_(std::move(o.sink_)) {}
+		: rec_(std::exchange(o.rec_, nullptr)), total_(o.total_), intent_(o.intent_), slot_(o.slot_),
+		  sink_(std::move(o.sink_)) {}
 	Claim &operator=(Claim &&o) noexcept
 	{
 		if (this != &o) {
@@ -87,6 +88,7 @@ public:
 				abort();
 			rec_ = std::exchange(o.rec_, nullptr);
 			total_ = o.total_;
+			intent_ = o.intent_;
 			slot_ = o.slot_;
 			sink_ = std::move(o.sink_);
 		}
@@ -130,15 +132,20 @@ private:
 		auto sink = std::move(sink_);
 		if (sink) {
 			sink->publish(rec, total_, abort, slot_);
-		} else if (abort) {
-			detail::abort_record(rec, total_);
-		} else {
-			detail::commit_record(rec, total_);
+			return;
 		}
+		if (abort)
+			detail::abort_record(rec, total_);
+		else
+			detail::commit_record(rec, total_);
+		if (intent_)
+			std::atomic_ref<std::uint64_t>(*intent_).store(wire::no_intent);
 	}
 
 	std::byte *rec_ = nullptr;
 	std::int32_t total_ = 0;
+	// intent_ is the at field of the claim's slot, for a claim on a raw ring that a slot names.
+	std::uint64_t *intent_ = nullptr;
 	int slot_ = -1;
 	std::shared_ptr<detail::claim_sink> sink_;
 };
@@ -263,6 +270,45 @@ public:
 
 	// try_write copies payload into one record. It returns false when full.
 	bool try_write(std::uint32_t type, std::span<const std::byte> payload) { return write_record(-1, type, payload); }
+
+	// The overloads with a slot attribute the claim to a claim slot that the
+	// caller acquired. A queue does this for every claim.
+	std::optional<Claim> try_claim(int slot, std::uint32_t type, std::size_t len)
+	{
+		check_slot(slot);
+		std::byte *rec;
+		std::int32_t total;
+		if (!claim_record(slot, type, len, rec, total))
+			return std::nullopt;
+		Claim c(rec, total, slot, nullptr);
+		c.intent_ = reinterpret_cast<std::uint64_t *>(base_ + slot_off(slot, wire::offset::slot_at));
+		return c;
+	}
+
+	bool try_write(int slot, std::uint32_t type, std::span<const std::byte> payload)
+	{
+		check_slot(slot);
+		return write_record(slot, type, payload);
+	}
+
+	// acquire_slot takes a claim slot for the procID self. It prefers a free
+	// slot. Otherwise it takes a slot whose owner dead(owner) reports gone and
+	// whose claim the reader has passed.
+	template <class Dead>
+	int acquire_slot(std::uint64_t self, Dead &&dead)
+	{
+		int slot = find_slot(self, dead);
+		if (slot < 0)
+			throw error(errc::too_many_claims, "goipc: every claim slot of the ring is held");
+		return slot;
+	}
+
+	// drop_slot returns a slot that self holds to the shared pool.
+	void drop_slot(std::uint64_t self, int slot) noexcept
+	{
+		slot_at(slot).store(wire::no_intent);
+		slot_owner(slot).compare_exchange_strong(self, wire::consumer_none);
+	}
 
 	// read passes up to limit committed records to fn(type, payload) and returns
 	// the count. The payload aliases the ring and is valid only during the call.
@@ -464,11 +510,15 @@ private:
 		return true;
 	}
 
-	// acquire_slot takes a claim slot for self. It prefers a free slot.
-	// Otherwise it takes a slot whose owner is dead and whose claim the reader
-	// has passed.
+	static void check_slot(int slot)
+	{
+		if (slot < 0 || slot >= static_cast<int>(wire::claim_slots))
+			throw error(errc::invalid, "goipc: claim slot " + std::to_string(slot) + " is out of range");
+	}
+
+	// find_slot runs the acquire.
 	template <class Dead>
-	int acquire_slot(std::uint64_t self, Dead &&dead)
+	int find_slot(std::uint64_t self, Dead &&dead)
 	{
 		for (int i = 0; i < static_cast<int>(wire::claim_slots); i++) {
 			std::uint64_t none = 0;
@@ -493,13 +543,6 @@ private:
 			}
 		}
 		return -1;
-	}
-
-	// drop_slot returns a slot to the shared pool.
-	void drop_slot(std::uint64_t self, int slot) noexcept
-	{
-		slot_at(slot).store(wire::no_intent);
-		slot_owner(slot).compare_exchange_strong(self, wire::consumer_none);
 	}
 
 	// The slot records the cursor range before the claim takes it, so a

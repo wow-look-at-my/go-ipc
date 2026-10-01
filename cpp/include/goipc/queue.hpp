@@ -312,7 +312,7 @@ struct queue_state final : claim_sink {
 			}
 		}
 		std::map<std::uint64_t, bool> known;
-		int slot = ring.acquire_slot(self, [&](std::uint64_t id) {
+		int slot = ring.find_slot(self, [&](std::uint64_t id) {
 			auto it = known.find(id);
 			if (it == known.end())
 				it = known.emplace(id, is_dead(id)).first;
