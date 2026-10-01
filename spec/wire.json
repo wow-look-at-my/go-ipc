@@ -1,0 +1,40 @@
+{
+  "spec_version": 1,
+  "ring": {
+    "magic": "0x676F2D6970632D31",
+    "version": 1,
+    "header_size": 512,
+    "cache_line": 128,
+    "min_capacity": 4096,
+    "record_header_size": 8,
+    "record_alignment": 8,
+    "type_padding": 4294967295,
+    "fields": [
+      {"name": "magic", "offset": 0, "size": 8},
+      {"name": "version", "offset": 8, "size": 4},
+      {"name": "flags", "offset": 12, "size": 4},
+      {"name": "capacity", "offset": 16, "size": 8},
+      {"name": "tail", "offset": 128, "size": 8},
+      {"name": "head", "offset": 256, "size": 8},
+      {"name": "head_cache", "offset": 384, "size": 8},
+      {"name": "recv_waiters", "offset": 392, "size": 4},
+      {"name": "send_waiters", "offset": 396, "size": 4}
+    ]
+  },
+  "queue": {
+    "default_capacity": 1048576,
+    "segment_path": "/dev/shm/go-shm-{name}",
+    "event_path": "/dev/shm/go-ipc-{name}.event",
+    "not_empty_suffix": ".ne",
+    "not_full_suffix": ".nf",
+    "signal_max_tokens": 4096
+  },
+  "channel": {
+    "creator_to_opener_suffix": ".c2o",
+    "opener_to_creator_suffix": ".o2c"
+  },
+  "conn": {
+    "type_data": 0,
+    "type_eof": 1
+  }
+}
