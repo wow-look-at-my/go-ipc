@@ -54,7 +54,7 @@ $(PY_TESTS): test-py-%: $(OUT)/schema.json
 		echo "python $*: interpreter not installed; run 'make -C python interpreters'" >&2; \
 		exit 1; }
 	cd py && PYTHONPATH=$(GEN_DIR)/py IPCGEN_VECTORS=$(VECTORS) IPCGEN_SCHEMA_JSON=$(OUT)/schema.json \
-		uv run --no-project --no-python-downloads --python $* python -m unittest -v test_demo
+		uv run --no-project --no-python-downloads --python $* python -W error -m unittest -v test_demo
 
 prepare: require
 	cp $(GEN_DIR)/go/demo/demo.go go/demo/demo.go

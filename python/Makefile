@@ -32,7 +32,7 @@ $(TEST_TARGETS): test-%:
 		echo "python $*: interpreter not installed; run 'make -C python interpreters'" >&2; \
 		exit 1; }
 	uv run --no-project --no-python-downloads --python $* \
-		python -m unittest discover -s tests -p '$(PATTERN)' -v $(UNITTEST_ARGS)
+		python -W error -m unittest discover -s tests -p '$(PATTERN)' -v $(UNITTEST_ARGS)
 
 clean:
 	find $(CURDIR) -name __pycache__ -type d -prune -exec rm -rf {} +
