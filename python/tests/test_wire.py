@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -15,14 +14,8 @@ from goipc.peer import pattern
 import support
 
 
-def load_wire() -> dict:
-	with open(os.path.join(support.spec_dir(), "wire.json")) as f:
-		return json.load(f)
-
-
 class WireConstantsTest(unittest.TestCase):
-	def setUp(self) -> None:
-		self.spec = load_wire()
+	spec = support.load_json("wire.json")
 
 	def test_ring_constants(self) -> None:
 		r = self.spec["ring"]
@@ -155,7 +148,3 @@ class LoadingTest(unittest.TestCase):
 		)
 		self.assertEqual(out.returncode, 0, out.stderr.decode())
 		self.assertIn("GOIPC_LIBRARY=/nonexistent/libgoipc.so", out.stdout.decode())
-
-
-if __name__ == "__main__":
-	unittest.main()

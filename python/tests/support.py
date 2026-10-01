@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import selectors
 import subprocess
@@ -23,6 +24,18 @@ _counter = itertools.count()
 
 def spec_dir() -> str:
 	return os.environ.get("GOIPC_SPEC_DIR") or os.path.join(os.path.dirname(PYTHON_DIR), "spec")
+
+
+def load_json(*parts: str) -> Any:
+	"""Loads a JSON file under the spec directory."""
+	with open(os.path.join(spec_dir(), *parts)) as f:
+		return json.load(f)
+
+
+def spec_file(*parts: str) -> bytes:
+	"""Returns the bytes of a file under the spec directory."""
+	with open(os.path.join(spec_dir(), *parts), "rb") as f:
+		return f.read()
 
 
 def unique_name(label: str) -> str:
