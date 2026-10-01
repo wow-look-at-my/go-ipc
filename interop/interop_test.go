@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 const (
@@ -58,12 +59,12 @@ func langs(t *testing.T) []string {
 		return allLangs
 	}
 	var out []string
-	seen := map[string]bool{}
+	seen := set.New[string]()
 	for _, l := range strings.Split(v, ",") {
 		l = strings.TrimSpace(l)
 		require.Contains(t, allLangs, l, "%s names an unknown language", langsEnv)
-		if !seen[l] {
-			seen[l] = true
+		if !seen.Contains(l) {
+			seen.Add(l)
 			out = append(out, l)
 		}
 	}

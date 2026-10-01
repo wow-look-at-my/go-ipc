@@ -21,3 +21,15 @@ jobs:
         with:
           # A library has no main package, so a release has nothing to carry.
           autorelease: false
+
+  # Builds every implementation and runs the cross-language matrix.
+  matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo curl -fL --compressed "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64" -o /usr/local/bin/go-toolchain
+      - run: sudo chmod +x /usr/local/bin/go-toolchain
+      - run: sudo apt-get update && sudo apt-get install -y libgtest-dev jq
+      - run: pipx install uv
+      - run: make -C python interpreters
+      - run: make test
