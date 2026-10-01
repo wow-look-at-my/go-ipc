@@ -84,10 +84,12 @@ func newEventImpl(path string) (*eventImpl, error) {
 }
 
 func openFIFO(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	// os.OpenFile keeps a FIFO out of the poller on darwin.
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, err
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
+	f := os.NewFile(uintptr(fd), path)
 	// A pollable handle is the whole point, so prove it rather than assume
 	// it. Deadline support is the observable consequence of registration
 	// with the runtime poller.
