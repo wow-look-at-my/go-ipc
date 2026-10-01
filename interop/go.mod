@@ -19,3 +19,10 @@ require (
 )
 
 replace github.com/wow-look-at-my/go-ipc => ../
+
+// ipcgen generates internal/demo/demo.go from the same tree, so it resolves locally.
+require github.com/wow-look-at-my/go-ipc/ipcgen v0.0.0
+
+replace github.com/wow-look-at-my/go-ipc/ipcgen => ../ipcgen
+
+tool github.com/wow-look-at-my/go-ipc/ipcgen
