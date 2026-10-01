@@ -134,11 +134,11 @@ public:
 			s_->ch.close();
 			return;
 		}
+		// The end-of-stream message is best effort: a full ring or a peer that
+		// is gone already makes it moot.
 		try {
 			s_->ch.tx().try_send(wire::conn_type_eof, {});
-		} catch (const error &e) {
-			if (e.value() != errc::closed)
-				throw;
+		} catch (const error &) {
 		}
 		s_->ch.close();
 	}

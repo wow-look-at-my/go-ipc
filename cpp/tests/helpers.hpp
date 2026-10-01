@@ -13,6 +13,10 @@
 #include <thread>
 #include <vector>
 
+#include <stdexcept>
+
+#include <fcntl.h>
+#include <poll.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -53,6 +57,69 @@ inline bool file_exists(const std::string &path)
 	struct stat st;
 	return ::stat(path.c_str(), &st) == 0;
 }
+
+inline std::string read_text(const std::string &path)
+{
+	std::string out;
+	int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return out;
+	char buf[256];
+	ssize_t n;
+	while ((n = ::read(fd, buf, sizeof buf)) > 0)
+		out.append(buf, static_cast<std::size_t>(n));
+	::close(fd);
+	return out;
+}
+
+// pipe_pair carries one-byte commands between a test and a forked child.
+class pipe_pair {
+public:
+	pipe_pair()
+	{
+		if (::pipe2(fds_, O_CLOEXEC) != 0)
+			throw std::runtime_error("pipe2 failed");
+	}
+	~pipe_pair()
+	{
+		::close(fds_[0]);
+		::close(fds_[1]);
+	}
+	pipe_pair(const pipe_pair &) = delete;
+	pipe_pair &operator=(const pipe_pair &) = delete;
+
+	void signal(char c = 1) const
+	{
+		if (::write(fds_[1], &c, 1) != 1)
+			throw std::runtime_error("pipe write failed");
+	}
+
+	bool wait() const
+	{
+		pollfd p{fds_[0], POLLIN, 0};
+		if (::poll(&p, 1, 30000) != 1)
+			return false;
+		char c;
+		return ::read(fds_[0], &c, 1) == 1;
+	}
+
+	void send_u64(std::uint64_t v) const
+	{
+		if (::write(fds_[1], &v, sizeof v) != sizeof v)
+			throw std::runtime_error("pipe write failed");
+	}
+
+	std::uint64_t recv_u64() const
+	{
+		std::uint64_t v = 0;
+		if (::read(fds_[0], &v, sizeof v) != sizeof v)
+			throw std::runtime_error("pipe read failed");
+		return v;
+	}
+
+private:
+	int fds_[2];
+};
 
 struct queue_files {
 	std::string name;

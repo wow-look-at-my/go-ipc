@@ -32,6 +32,14 @@ enum class errc : int {
 	buffer = -16,
 	// The conn peer ended the stream.
 	eof = -17,
+	// The process at the other end exited or closed its end.
+	peer_gone = -18,
+	// A live process holds the name.
+	in_use = -19,
+	// The handle does not own the receiving end.
+	not_consumer = -20,
+	// Live claims hold every claim slot of the ring.
+	too_many_claims = -21,
 };
 
 namespace detail {
@@ -60,6 +68,10 @@ public:
 		case errc::invalid: return "invalid argument";
 		case errc::buffer: return "receive buffer is smaller than the next message";
 		case errc::eof: return "end of stream";
+		case errc::peer_gone: return "peer is gone";
+		case errc::in_use: return "name is in use";
+		case errc::not_consumer: return "handle is not the receiving end";
+		case errc::too_many_claims: return "too many claims in progress";
 		}
 		return "unknown goipc error";
 	}

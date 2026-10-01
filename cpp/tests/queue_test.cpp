@@ -20,22 +20,31 @@ using testutil::bytes_of;
 using testutil::errc_of;
 using testutil::text_of;
 
-TEST(Queue, CreateMakesThreeFiles)
+TEST(Queue, CreateMakesNameAndInstance)
 {
 	auto name = testutil::unique_name("q");
 	testutil::queue_files f{name};
 	auto q = Queue::create(name, 8192);
+	const std::string inc = q.incarnation();
+	ASSERT_EQ(inc.size(), 16u);
+	EXPECT_EQ(inc.find_first_not_of("0123456789abcdef"), std::string::npos) << inc;
+
 	struct stat st;
-	ASSERT_EQ(::stat(("/dev/shm/go-shm-" + name).c_str(), &st), 0);
-	EXPECT_EQ(st.st_size, 512 + 8192);
+	ASSERT_EQ(::stat(("/dev/shm/go-ipc-" + name + ".name").c_str(), &st), 0);
+	EXPECT_EQ(st.st_mode & 0777, 0600u);
+	EXPECT_EQ(testutil::read_text("/dev/shm/go-ipc-" + name + ".inc"), inc);
+	ASSERT_EQ(::stat(("/dev/shm/go-shm-" + name + "." + inc).c_str(), &st), 0);
+	EXPECT_EQ(st.st_size, static_cast<off_t>(goipc::wire::header_size + 8192));
 	EXPECT_EQ(st.st_mode & 0777, 0600u);
 	for (const char *suffix : {".ne", ".nf"}) {
-		ASSERT_EQ(::stat(("/dev/shm/go-ipc-" + name + suffix + ".event").c_str(), &st), 0) << suffix;
+		ASSERT_EQ(::stat(("/dev/shm/go-ipc-" + name + "." + inc + suffix + ".event").c_str(), &st), 0) << suffix;
 		EXPECT_TRUE(S_ISFIFO(st.st_mode));
 	}
 	EXPECT_EQ(q.name(), name);
 	EXPECT_EQ(q.capacity(), 8192u);
 	EXPECT_EQ(q.max_message_size(), 4088u);
+	EXPECT_TRUE(q.is_receiver());
+	EXPECT_EQ(q.ring().consumer(), goipc::detail::self_id());
 }
 
 TEST(Queue, DefaultCapacity)
@@ -196,12 +205,14 @@ TEST(Queue, UseAfterClose)
 	EXPECT_EQ(errc_of([&] { q.read_batch(1, [](std::uint32_t, std::span<const std::byte>) {}); }), errc::closed);
 }
 
-TEST(Queue, UnlinkRemovesThreeFiles)
+TEST(Queue, UnlinkRemovesNameAndInstance)
 {
 	auto name = testutil::unique_name("q");
 	auto q = Queue::create(name, 4096);
-	std::vector<std::string> paths = {"/dev/shm/go-shm-" + name, "/dev/shm/go-ipc-" + name + ".ne.event",
-					  "/dev/shm/go-ipc-" + name + ".nf.event"};
+	std::string inst = name + "." + q.incarnation();
+	std::vector<std::string> paths = {"/dev/shm/go-ipc-" + name + ".name", "/dev/shm/go-ipc-" + name + ".inc",
+					  "/dev/shm/go-shm-" + inst, "/dev/shm/go-ipc-" + inst + ".ne.event",
+					  "/dev/shm/go-ipc-" + inst + ".nf.event"};
 	for (const auto &p : paths)
 		ASSERT_TRUE(testutil::file_exists(p)) << p;
 	q.unlink();
@@ -216,13 +227,121 @@ TEST(Queue, CreateReplacesStaleInstance)
 {
 	auto name = testutil::unique_name("q");
 	testutil::queue_files f{name};
+	std::string old_inc;
 	{
 		auto old = Queue::create(name, 8192);
+		old_inc = old.incarnation();
 		ASSERT_TRUE(old.try_send(1, bytes_of("stale")));
 	}
 	auto q = Queue::create(name, 4096);
+	EXPECT_NE(q.incarnation(), old_inc);
+	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name + "." + old_inc));
 	EXPECT_EQ(q.capacity(), 4096u);
 	EXPECT_FALSE(q.try_recv().has_value());
+}
+
+TEST(Queue, OnlyTheCreatorReceives)
+{
+	auto name = testutil::unique_name("q");
+	testutil::queue_files f{name};
+	auto q = Queue::create(name, 4096);
+	auto p = Queue::open(name);
+	EXPECT_FALSE(p.is_receiver());
+	ASSERT_TRUE(p.try_send(1, bytes_of("x")));
+	std::vector<std::byte> buf(8);
+	EXPECT_EQ(errc_of([&] { p.try_recv(); }), errc::not_consumer);
+	EXPECT_EQ(errc_of([&] { p.try_recv(buf); }), errc::not_consumer);
+	EXPECT_EQ(errc_of([&] { p.recv(10ms); }), errc::not_consumer);
+	EXPECT_EQ(errc_of([&] { p.read_batch(1, [](std::uint32_t, std::span<const std::byte>) {}, 10ms); }),
+		  errc::not_consumer);
+	EXPECT_TRUE(q.try_recv().has_value());
+}
+
+TEST(Queue, SecondCreatorInSameProcessIsInUse)
+{
+	auto name = testutil::unique_name("q");
+	testutil::queue_files f{name};
+	auto q = Queue::create(name, 4096);
+	EXPECT_EQ(errc_of([&] { Queue::create(name, 4096); }), errc::in_use);
+	q.close();
+	EXPECT_NO_THROW(Queue::create(name, 4096));
+}
+
+TEST(Queue, ReceiverCloseGivesSendersPeerGone)
+{
+	auto name = testutil::unique_name("q");
+	testutil::queue_files f{name};
+	auto q = Queue::create(name, 4096);
+	auto p = Queue::open(name);
+	ASSERT_TRUE(p.try_send(1, bytes_of("before")));
+	q.close();
+	EXPECT_EQ(p.ring().consumer(), 0u);
+	EXPECT_EQ(errc_of([&] { p.try_send(1, bytes_of("after")); }), errc::peer_gone);
+	EXPECT_EQ(errc_of([&] { p.send(1, bytes_of("after"), 1s); }), errc::peer_gone);
+	EXPECT_EQ(errc_of([&] { p.claim(1, 4, 1s); }), errc::peer_gone);
+	EXPECT_EQ(errc_of([&] { Queue::open(name); }), errc::peer_gone);
+}
+
+// A claim holds its slot's intent from before the tail swap until its commit.
+TEST(Queue, ClaimSlotIntent)
+{
+	auto name = testutil::unique_name("q");
+	testutil::queue_files f{name};
+	auto q = Queue::create(name, 4096);
+	auto p = Queue::open(name);
+	auto &r = p.ring();
+	const std::uint64_t self = goipc::detail::self_id();
+	auto open_slots = [&] {
+		std::vector<int> out;
+		for (int i = 0; i < static_cast<int>(goipc::wire::claim_slots); i++)
+			if (r.slot_owner(i).load() == self && r.slot_at(i).load() != goipc::wire::no_intent)
+				out.push_back(i);
+		return out;
+	};
+
+	ASSERT_TRUE(p.try_send(1, bytes_of("abc")));
+	EXPECT_TRUE(open_slots().empty());
+
+	std::uint64_t tail = r.tail();
+	auto c = p.claim(2, 10, 1s);
+	auto held = open_slots();
+	ASSERT_EQ(held.size(), 1u);
+	EXPECT_EQ(r.slot_at(held[0]).load(), tail);
+	EXPECT_EQ(r.slot_size(held[0]).load(), 24u);
+	c.commit();
+	EXPECT_TRUE(open_slots().empty());
+	EXPECT_EQ(r.slot_owner(held[0]).load(), self);
+
+	// A full ring releases the intent of the claim it refused.
+	while (p.try_send(1, std::vector<std::byte>(500))) {
+	}
+	EXPECT_TRUE(open_slots().empty());
+
+	// A close returns the slots to the shared pool.
+	p.close();
+	EXPECT_EQ(q.ring().slot_owner(held[0]).load(), 0u);
+}
+
+TEST(Queue, TooManyClaims)
+{
+	auto name = testutil::unique_name("q");
+	testutil::queue_files f{name};
+	auto q = Queue::create(name, 8192);
+	std::vector<goipc::Claim> claims;
+	for (std::size_t i = 0; i < goipc::wire::claim_slots; i++) {
+		auto c = q.try_claim(1, 0);
+		ASSERT_TRUE(c.has_value()) << i;
+		claims.push_back(std::move(*c));
+	}
+	EXPECT_EQ(errc_of([&] { q.try_claim(1, 0); }), errc::too_many_claims);
+	EXPECT_EQ(errc_of([&] { q.try_send(1, {}); }), errc::too_many_claims);
+	claims.back().commit();
+	claims.pop_back();
+	EXPECT_TRUE(q.try_send(7, {}));
+	claims.clear();
+	std::size_t n = 0;
+	q.try_read_batch(SIZE_MAX, [&](std::uint32_t t, std::span<const std::byte>) { n += t == 1 ? 1 : 0; });
+	EXPECT_EQ(n, 1u);
 }
 
 TEST(Queue, CrossProcessOrdering)
@@ -265,22 +384,27 @@ TEST(Queue, CrossProcessOrdering)
 TEST(Queue, CrossProcessBlockingRecvWakes)
 {
 	auto name = testutil::unique_name("q");
-	testutil::queue_files f{name};
+	auto ping = testutil::unique_name("ping");
+	testutil::queue_files f{name}, f2{ping};
 	auto q = Queue::create(name, 4096);
+	testutil::pipe_pair go;
 	pid_t pid = testutil::fork_child([&] {
-		auto p = Queue::open(name);
-		auto m = p.recv(30s);
-		p.send(m.type + 1, m.payload, 30s);
+		auto in = Queue::create(ping, 4096);
+		auto out = Queue::open(name);
+		go.signal();
+		auto m = in.recv(30s);
+		out.send(m.type + 1, m.payload, 30s);
 		return 0;
 	});
+	ASSERT_TRUE(go.wait());
+	auto p = Queue::open(ping);
 	// Wait for the child to park so the wake path is the one under test.
-	ASSERT_TRUE(testutil::eventually([&] { return q.ring().recv_waiters() > 0; }));
-	q.send(41, bytes_of("ping"), 10s);
-	ASSERT_TRUE(testutil::eventually([&] { return q.ring().recv_waiters() == 0; }));
-	EXPECT_EQ(testutil::exit_code(testutil::wait_child(pid).status), 0);
+	ASSERT_TRUE(testutil::eventually([&] { return p.ring().recv_waiters() > 0; }));
+	p.send(41, bytes_of("ping"), 10s);
 	auto m = q.recv(10s);
 	EXPECT_EQ(m.type, 42u);
 	EXPECT_EQ(text_of(m.payload), "ping");
+	EXPECT_EQ(testutil::exit_code(testutil::wait_child(pid).status), 0);
 }
 
 } // namespace

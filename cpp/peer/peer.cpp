@@ -15,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+#include <unistd.h>
+
 #include <goipc/goipc.hpp>
 
 #include "demo.hpp"
@@ -51,10 +53,9 @@ void ready()
 
 std::span<const std::byte> bytes_of(std::string_view s) { return std::as_bytes(std::span(s.data(), s.size())); }
 
-void role_recv(std::string_view name, std::uint64_t total, std::uint64_t capacity, const goipc::detail::deadline &d)
+// recv_checked receives total messages as the recv role checks them.
+void recv_checked(goipc::Queue &q, std::uint64_t total, const goipc::detail::deadline &d)
 {
-	auto q = goipc::Queue::create(name, capacity);
-	ready();
 	std::map<std::string, std::uint64_t> next;
 	std::vector<std::byte> buf(q.max_message_size());
 	for (std::uint64_t i = 0; i < total; i++) {
@@ -74,10 +75,126 @@ void role_recv(std::string_view name, std::uint64_t total, std::uint64_t capacit
 						 std::to_string(seq) + ", want " + std::to_string(want));
 		want = seq + 1;
 	}
-	std::printf("ok %llu\n", static_cast<unsigned long long>(total));
-	std::fflush(stdout);
+}
+
+void print_line(const std::string &line)
+{
+	if (std::fputs((line + "\n").c_str(), stdout) < 0 || std::fflush(stdout) != 0)
+		throw std::runtime_error("write \"" + line + "\"");
+}
+
+void role_recv(std::string_view name, std::uint64_t total, std::uint64_t capacity, const goipc::detail::deadline &d)
+{
+	auto q = goipc::Queue::create(name, capacity);
+	ready();
+	recv_checked(q, total, d);
+	print_line("ok " + std::to_string(total));
 	q.close();
 	q.unlink();
+}
+
+// die_now stands in for a process that dies: no destructor, close or exit
+// handler runs.
+[[noreturn]] void die_now()
+{
+	std::fflush(stdout);
+	std::fflush(stderr);
+	::_exit(0);
+}
+
+void role_claim_and_die(std::string_view name, std::uint64_t length, const goipc::detail::deadline &d)
+{
+	auto q = goipc::Queue::open(name);
+	goipc::Claim c = q.claim(1, length, d.left());
+	std::memset(c.bytes().data(), 0xAB, c.bytes().size());
+	die_now();
+}
+
+bool is_peer_gone(const goipc::error &e) { return e.value() == goipc::errc::peer_gone; }
+
+void role_send_until_gone(std::string_view name, std::string_view sender, const goipc::detail::deadline &d)
+{
+	auto q = goipc::Queue::open(name);
+	std::uint64_t n = 0;
+	for (;; n++) {
+		std::string payload = std::string(sender) + ":" + std::to_string(n);
+		try {
+			q.send(static_cast<std::uint32_t>(n), bytes_of(payload), d.left());
+		} catch (const goipc::error &e) {
+			if (!is_peer_gone(e))
+				throw;
+			break;
+		}
+	}
+	print_line("gone " + std::to_string(n));
+	q.close();
+}
+
+void role_recv_then_stop(std::string_view name, std::uint64_t count, std::uint64_t capacity, std::string_view mode,
+			 const goipc::detail::deadline &d)
+{
+	if (mode != "close" && mode != "exit")
+		throw std::runtime_error("mode must be close or exit, not \"" + std::string(mode) + "\"");
+	auto q = goipc::Queue::create(name, capacity);
+	ready();
+	recv_checked(q, count, d);
+	print_line("ok " + std::to_string(count));
+	if (mode == "exit") {
+		q.unlink();
+		die_now();
+	}
+	q.close();
+	q.unlink();
+}
+
+std::string chan_payload(std::uint64_t i) { return "0:" + std::to_string(i); }
+
+void role_chan_recv_until_gone(std::string_view name, std::uint64_t capacity, std::uint64_t count,
+			       const goipc::detail::deadline &d)
+{
+	auto c = goipc::Channel::create(name, capacity);
+	ready();
+	std::vector<std::byte> buf(c.max_message_size());
+	std::uint64_t n = 0;
+	for (;; n++) {
+		goipc::received r{};
+		try {
+			r = c.recv(buf, d.left());
+		} catch (const goipc::error &e) {
+			if (!is_peer_gone(e))
+				throw;
+			break;
+		}
+		std::string_view text(reinterpret_cast<const char *>(buf.data()), r.size);
+		if (r.type != n || text != chan_payload(n))
+			throw std::runtime_error("message " + std::to_string(n) + ": type " + std::to_string(r.type) +
+						 ", payload \"" + std::string(text) + "\"");
+	}
+	if (n != count)
+		throw std::runtime_error("received " + std::to_string(n) + " messages, want " + std::to_string(count));
+	try {
+		c.send(0, {}, d.left());
+		throw std::runtime_error("a send after the peer left went through");
+	} catch (const goipc::error &e) {
+		if (!is_peer_gone(e))
+			throw;
+	}
+	print_line("ok " + std::to_string(count));
+	c.close();
+	c.unlink();
+}
+
+void role_chan_send_then_stop(std::string_view name, std::uint64_t count, std::string_view mode,
+			      const goipc::detail::deadline &d)
+{
+	if (mode != "close" && mode != "exit")
+		throw std::runtime_error("mode must be close or exit, not \"" + std::string(mode) + "\"");
+	auto c = goipc::Channel::open(name);
+	for (std::uint64_t i = 0; i < count; i++)
+		c.send(static_cast<std::uint32_t>(i), bytes_of(chan_payload(i)), d.left());
+	if (mode == "exit")
+		die_now();
+	c.close();
 }
 
 void role_send(std::string_view name, std::string_view sender, std::uint64_t count, const goipc::detail::deadline &d)
@@ -282,6 +399,21 @@ void run(int argc, char **argv)
 	} else if (role == "typed-recv") {
 		need(2, "typed-recv <name> <capacity>");
 		role_typed_recv(argv[2], parse_u64("capacity", argv[3]), d);
+	} else if (role == "claim-and-die") {
+		need(2, "claim-and-die <name> <length>");
+		role_claim_and_die(argv[2], parse_u64("length", argv[3]), d);
+	} else if (role == "send-until-gone") {
+		need(2, "send-until-gone <name> <sender>");
+		role_send_until_gone(argv[2], argv[3], d);
+	} else if (role == "recv-then-stop") {
+		need(4, "recv-then-stop <name> <count> <capacity> <mode>");
+		role_recv_then_stop(argv[2], parse_u64("count", argv[3]), parse_u64("capacity", argv[4]), argv[5], d);
+	} else if (role == "chan-recv-until-gone") {
+		need(3, "chan-recv-until-gone <name> <capacity> <count>");
+		role_chan_recv_until_gone(argv[2], parse_u64("capacity", argv[3]), parse_u64("count", argv[4]), d);
+	} else if (role == "chan-send-then-stop") {
+		need(3, "chan-send-then-stop <name> <count> <mode>");
+		role_chan_send_then_stop(argv[2], parse_u64("count", argv[3]), argv[4], d);
 	} else {
 		throw std::runtime_error("unknown role \"" + std::string(role) + "\"");
 	}

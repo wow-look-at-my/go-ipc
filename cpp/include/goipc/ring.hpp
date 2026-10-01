@@ -35,11 +35,13 @@ struct message {
 
 namespace detail {
 
+struct queue_state;
+
 // claim_sink publishes a claim that a queue handed out, so that the commit
 // also wakes the receiver.
 class claim_sink {
 public:
-	virtual void publish(std::byte *rec, std::int32_t total, bool abort) = 0;
+	virtual void publish(std::byte *rec, std::int32_t total, bool abort, int slot) = 0;
 
 protected:
 	~claim_sink() = default;
@@ -77,7 +79,8 @@ class Claim {
 public:
 	Claim() = default;
 	Claim(Claim &&o) noexcept
-		: rec_(std::exchange(o.rec_, nullptr)), total_(o.total_), sink_(std::move(o.sink_)) {}
+		: rec_(std::exchange(o.rec_, nullptr)), total_(o.total_), intent_(o.intent_), slot_(o.slot_),
+		  sink_(std::move(o.sink_)) {}
 	Claim &operator=(Claim &&o) noexcept
 	{
 		if (this != &o) {
@@ -85,6 +88,8 @@ public:
 				abort();
 			rec_ = std::exchange(o.rec_, nullptr);
 			total_ = o.total_;
+			intent_ = o.intent_;
+			slot_ = o.slot_;
 			sink_ = std::move(o.sink_);
 		}
 		return *this;
@@ -116,8 +121,8 @@ private:
 	friend class Ring;
 	friend class Queue;
 
-	Claim(std::byte *rec, std::int32_t total, std::shared_ptr<detail::claim_sink> sink)
-		: rec_(rec), total_(total), sink_(std::move(sink)) {}
+	Claim(std::byte *rec, std::int32_t total, int slot, std::shared_ptr<detail::claim_sink> sink)
+		: rec_(rec), total_(total), slot_(slot), sink_(std::move(sink)) {}
 
 	void finish(bool abort)
 	{
@@ -126,17 +131,32 @@ private:
 		std::byte *rec = std::exchange(rec_, nullptr);
 		auto sink = std::move(sink_);
 		if (sink) {
-			sink->publish(rec, total_, abort);
-		} else if (abort) {
-			detail::abort_record(rec, total_);
-		} else {
-			detail::commit_record(rec, total_);
+			sink->publish(rec, total_, abort, slot_);
+			return;
 		}
+		if (abort)
+			detail::abort_record(rec, total_);
+		else
+			detail::commit_record(rec, total_);
+		if (intent_)
+			std::atomic_ref<std::uint64_t>(*intent_).store(wire::no_intent);
 	}
 
 	std::byte *rec_ = nullptr;
 	std::int32_t total_ = 0;
+	// intent_ is the at field of the claim's slot, for a claim on a raw ring that a slot names.
+	std::uint64_t *intent_ = nullptr;
+	int slot_ = -1;
 	std::shared_ptr<detail::claim_sink> sink_;
+};
+
+// stall is a claim that stops the reader at head: its producer has not
+// written the header yet, or has not committed it.
+struct stall {
+	std::uint64_t at = 0;
+	std::int32_t length = 0;
+	// slots holds every slot whose intent covers at.
+	std::vector<int> slots;
 };
 
 // Ring is a view of a ring in a caller buffer. Any number of threads in any
@@ -159,7 +179,9 @@ public:
 	static constexpr std::size_t size_for(std::size_t capacity) noexcept { return wire::header_size + capacity; }
 
 	// init formats buf as an empty ring. Every byte of buf is overwritten.
-	static Ring init(std::span<std::byte> buf)
+	// consumer is the procID of the reader, recorded before the ring becomes
+	// visible.
+	static Ring init(std::span<std::byte> buf, std::uint64_t consumer = wire::consumer_none)
 	{
 		check_buffer(buf);
 		std::uint64_t capacity = std::bit_floor(static_cast<std::uint64_t>(buf.size() - wire::header_size));
@@ -167,6 +189,10 @@ public:
 		std::byte *base = buf.data();
 		std::memcpy(base + wire::offset::capacity, &capacity, 8);
 		std::memcpy(base + wire::offset::version, &wire::ring_version, 4);
+		u64(base, wire::offset::consumer).store(consumer);
+		for (std::size_t i = 0; i < wire::claim_slots; i++)
+			u64(base, slot_off(static_cast<int>(i), wire::offset::slot_at)).store(wire::no_intent);
+		// The magic goes last, so a peer that attaches sees nothing or a complete header.
 		u64(base, wire::offset::magic).store(wire::ring_magic);
 		return Ring(base, capacity);
 	}
@@ -202,6 +228,19 @@ public:
 	std::uint64_t tail() const noexcept { return u64(base_, wire::offset::tail).load(); }
 	std::int32_t recv_waiters() const noexcept { return i32(wire::offset::recv_waiters).load(); }
 	std::int32_t send_waiters() const noexcept { return i32(wire::offset::send_waiters).load(); }
+	std::uint64_t consumer() const noexcept { return u64(base_, wire::offset::consumer).load(); }
+	// data is the start of the data region.
+	std::byte *data() const noexcept { return data_; }
+
+	std::atomic_ref<std::uint64_t> slot_owner(int slot) const noexcept
+	{
+		return u64(base_, slot_off(slot, wire::offset::slot_owner));
+	}
+	std::atomic_ref<std::uint64_t> slot_at(int slot) const noexcept { return u64(base_, slot_off(slot, wire::offset::slot_at)); }
+	std::atomic_ref<std::uint64_t> slot_size(int slot) const noexcept
+	{
+		return u64(base_, slot_off(slot, wire::offset::slot_claim_size));
+	}
 
 	// buffered is a sample of the bytes claimed but not yet consumed.
 	std::size_t buffered() const noexcept
@@ -218,26 +257,57 @@ public:
 
 	// try_claim reserves a record of len payload bytes. It returns nullopt when
 	// the ring is full.
+	// A raw claim names no producer. The reader cannot recover it, and waits
+	// for it forever.
 	std::optional<Claim> try_claim(std::uint32_t type, std::size_t len)
 	{
 		std::byte *rec;
 		std::int32_t total;
-		if (!claim_slot(type, len, rec, total))
+		if (!claim_record(-1, type, len, rec, total))
 			return std::nullopt;
-		return Claim(rec, total, nullptr);
+		return Claim(rec, total, -1, nullptr);
 	}
 
 	// try_write copies payload into one record. It returns false when full.
-	bool try_write(std::uint32_t type, std::span<const std::byte> payload)
+	bool try_write(std::uint32_t type, std::span<const std::byte> payload) { return write_record(-1, type, payload); }
+
+	// The overloads with a slot attribute the claim to a claim slot that the
+	// caller acquired. A queue does this for every claim.
+	std::optional<Claim> try_claim(int slot, std::uint32_t type, std::size_t len)
 	{
+		check_slot(slot);
 		std::byte *rec;
 		std::int32_t total;
-		if (!claim_slot(type, payload.size(), rec, total))
-			return false;
-		if (!payload.empty())
-			std::memcpy(rec + wire::record_header_size, payload.data(), payload.size());
-		detail::commit_record(rec, total);
-		return true;
+		if (!claim_record(slot, type, len, rec, total))
+			return std::nullopt;
+		Claim c(rec, total, slot, nullptr);
+		c.intent_ = reinterpret_cast<std::uint64_t *>(base_ + slot_off(slot, wire::offset::slot_at));
+		return c;
+	}
+
+	bool try_write(int slot, std::uint32_t type, std::span<const std::byte> payload)
+	{
+		check_slot(slot);
+		return write_record(slot, type, payload);
+	}
+
+	// acquire_slot takes a claim slot for the procID self. It prefers a free
+	// slot. Otherwise it takes a slot whose owner dead(owner) reports gone and
+	// whose claim the reader has passed.
+	template <class Dead>
+	int acquire_slot(std::uint64_t self, Dead &&dead)
+	{
+		int slot = find_slot(self, dead);
+		if (slot < 0)
+			throw error(errc::too_many_claims, "goipc: every claim slot of the ring is held");
+		return slot;
+	}
+
+	// drop_slot returns a slot that self holds to the shared pool.
+	void drop_slot(std::uint64_t self, int slot) noexcept
+	{
+		slot_at(slot).store(wire::no_intent);
+		slot_owner(slot).compare_exchange_strong(self, wire::consumer_none);
 	}
 
 	// read passes up to limit committed records to fn(type, payload) and returns
@@ -306,12 +376,14 @@ public:
 		} publish{head_ref, head, consumed};
 
 		while (count < limit && consumed < available) {
-			std::byte *rec = data_ + ((head + consumed) & mask_);
+			std::uint64_t index = (head + consumed) & mask_;
+			std::byte *rec = data_ + index;
 			std::int32_t len = detail::length_at(rec).load();
 			if (len <= 0)
 				break;
 			std::uint64_t step = detail::align8(static_cast<std::uint64_t>(len));
-			if (static_cast<std::size_t>(len) < wire::record_header_size || step > available - consumed)
+			if (static_cast<std::size_t>(len) < wire::record_header_size || step > available - consumed ||
+			    index + step > mask_ + 1)
 				throw error(errc::corrupt, "goipc: record length " + std::to_string(len) + " is corrupt");
 			std::uint32_t type = detail::load_type(rec);
 			if (type != wire::type_padding) {
@@ -331,6 +403,7 @@ public:
 
 private:
 	friend class Queue;
+	friend struct detail::queue_state;
 
 	Ring(std::byte *base, std::uint64_t capacity)
 		: base_(base), data_(base + wire::header_size), mask_(capacity - 1) {}
@@ -368,9 +441,115 @@ private:
 		return capacity - (tail - head) >= need;
 	}
 
-	// claim_slot runs the claim algorithm. It returns false when the ring is
-	// full, and leaves the record header holding -total and the type.
-	bool claim_slot(std::uint32_t type, std::size_t len, std::byte *&rec, std::int32_t &total)
+	static constexpr std::size_t slot_off(int slot, std::size_t field) noexcept
+	{
+		return wire::offset::slots + static_cast<std::size_t>(slot) * wire::slot_size + field;
+	}
+
+	// release clears the intent of a slot whose claim the reader can now pass.
+	// The owner keeps the slot for its next claim.
+	void release(int slot) noexcept
+	{
+		if (slot >= 0)
+			slot_at(slot).store(wire::no_intent);
+	}
+
+	bool write_record(int slot, std::uint32_t type, std::span<const std::byte> payload)
+	{
+		std::byte *rec;
+		std::int32_t total;
+		if (!claim_record(slot, type, payload.size(), rec, total))
+			return false;
+		if (!payload.empty())
+			std::memcpy(rec + wire::record_header_size, payload.data(), payload.size());
+		detail::commit_record(rec, total);
+		release(slot);
+		return true;
+	}
+
+	// stalled reports the claim that stops the reader, if there is one.
+	std::optional<stall> stalled() const
+	{
+		std::uint64_t h = head();
+		if (h == tail())
+			return std::nullopt;
+		std::int32_t length = detail::length_at(data_ + (h & mask_)).load();
+		if (length > 0)
+			return std::nullopt;
+		stall st;
+		st.at = h;
+		st.length = length;
+		for (int i = 0; i < static_cast<int>(wire::claim_slots); i++) {
+			std::uint64_t at = slot_at(i).load();
+			if (at != wire::no_intent && at <= h && h < at + slot_size(i).load())
+				st.slots.push_back(i);
+		}
+		return st;
+	}
+
+	// reclaim turns a stalled claim into padding, up to end. A dead producer
+	// made the claim, and end is where that claim stops. A false return means
+	// that the claim changed under the reader.
+	bool reclaim(const stall &st, std::uint64_t end, const std::vector<int> &dead)
+	{
+		std::uint64_t index = st.at & mask_;
+		std::uint64_t size = end - st.at;
+		// A claim that crossed the wrap point is reclaimed one lap segment at a time.
+		std::uint64_t to_end = mask_ + 1 - index;
+		if (size > to_end)
+			size = to_end;
+		std::int32_t expected = st.length;
+		// Only the reader reads a header, so the type can follow the length.
+		if (!detail::length_at(data_ + index).compare_exchange_strong(expected, static_cast<std::int32_t>(size)))
+			return false;
+		detail::store_type(data_ + index, wire::type_padding);
+		if (st.at + size == end) {
+			for (int i : dead)
+				slot_at(i).store(wire::no_intent);
+		}
+		return true;
+	}
+
+	static void check_slot(int slot)
+	{
+		if (slot < 0 || slot >= static_cast<int>(wire::claim_slots))
+			throw error(errc::invalid, "goipc: claim slot " + std::to_string(slot) + " is out of range");
+	}
+
+	// find_slot runs the acquire.
+	template <class Dead>
+	int find_slot(std::uint64_t self, Dead &&dead)
+	{
+		for (int i = 0; i < static_cast<int>(wire::claim_slots); i++) {
+			std::uint64_t none = 0;
+			if (slot_owner(i).compare_exchange_strong(none, self)) {
+				slot_at(i).store(wire::no_intent);
+				return i;
+			}
+		}
+		std::uint64_t h = head();
+		for (int i = 0; i < static_cast<int>(wire::claim_slots); i++) {
+			std::uint64_t owner = slot_owner(i).load();
+			if (owner == wire::consumer_none || owner == self)
+				continue;
+			std::uint64_t at = slot_at(i).load();
+			if (at != wire::no_intent && at + slot_size(i).load() > h)
+				continue;
+			if (!dead(owner))
+				continue;
+			if (slot_owner(i).compare_exchange_strong(owner, self)) {
+				slot_at(i).store(wire::no_intent);
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	// The slot records the cursor range before the claim takes it, so a
+	// reader stopped inside that range can always find the producer that is
+	// responsible. It returns false when the ring is full, and leaves the
+	// record header holding the type and -total.
+	bool claim_record(int slot, std::uint32_t type, std::size_t len, std::byte *&rec, std::int32_t &total)
 	{
 		if (type == wire::type_padding)
 			throw error(errc::reserved_type, "goipc: message type 0xFFFFFFFF is reserved");
@@ -400,9 +579,15 @@ private:
 				// this tail was loaded.
 				if (head > tail)
 					continue;
-				if (!has_room(tail, head, capacity, need))
+				if (!has_room(tail, head, capacity, need)) {
+					release(slot);
 					return false;
+				}
 				cache_ref.store(head);
+			}
+			if (slot >= 0) {
+				slot_size(slot).store(need);
+				slot_at(slot).store(tail);
 			}
 			if (!tail_ref.compare_exchange_strong(tail, tail + need))
 				continue;
@@ -415,8 +600,9 @@ private:
 			break;
 		}
 		rec = data_ + index;
-		detail::length_at(rec).store(-total);
+		// A negative length marks the record claimed but not yet readable.
 		detail::store_type(rec, type);
+		detail::length_at(rec).store(-total);
 		return true;
 	}
 

@@ -240,11 +240,13 @@ TEST(Concurrency, CloseWhileSendersRun)
 	for (int i = 0; i < 4; i++) {
 		threads.emplace_back([&] {
 			started++;
+			// A sender on the closing receiver's own handle sees the
+			// consumer cleared, or sees the handle closed.
 			try {
 				for (;;)
 					q.send(1, std::vector<std::byte>(300));
 			} catch (const goipc::error &e) {
-				EXPECT_EQ(e.value(), errc::closed);
+				EXPECT_TRUE(e.value() == errc::closed || e.value() == errc::peer_gone) << e.what();
 			}
 		});
 	}

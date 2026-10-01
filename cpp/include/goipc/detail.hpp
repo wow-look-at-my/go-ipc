@@ -28,9 +28,14 @@ static_assert(std::endian::native == std::endian::little, "the wire format is li
 namespace wire {
 
 inline constexpr std::uint64_t ring_magic = 0x676F2D6970632D31ULL;
-inline constexpr std::uint32_t ring_version = 1;
-inline constexpr std::size_t header_size = 512;
+inline constexpr std::uint32_t ring_version = 2;
 inline constexpr std::size_t cache_line = 128;
+inline constexpr std::size_t control_size = 4 * cache_line;
+inline constexpr std::size_t claim_slots = 256;
+inline constexpr std::size_t slot_size = 64;
+inline constexpr std::size_t header_size = control_size + claim_slots * slot_size;
+// no_intent marks a claim slot whose owner claims nothing right now.
+inline constexpr std::uint64_t no_intent = ~std::uint64_t(0);
 inline constexpr std::size_t min_capacity = 4096;
 inline constexpr std::size_t record_header_size = 8;
 inline constexpr std::size_t record_alignment = 8;
@@ -38,9 +43,24 @@ inline constexpr std::uint32_t type_padding = 0xFFFFFFFFu;
 
 inline constexpr std::size_t default_capacity = 1048576;
 inline constexpr int signal_max_tokens = 4096;
+inline constexpr std::string_view runtime_dir = "/dev/shm";
 inline constexpr std::string_view segment_prefix = "/dev/shm/go-shm-";
 inline constexpr std::string_view event_prefix = "/dev/shm/go-ipc-";
 inline constexpr std::string_view event_suffix = ".event";
+inline constexpr std::string_view name_prefix = "go-ipc-";
+inline constexpr std::string_view name_suffix = ".name";
+inline constexpr std::string_view inc_suffix = ".inc";
+inline constexpr std::string_view life_prefix = "go-ipc-life-";
+inline constexpr std::string_view life_suffix = ".sock";
+// incarnation_len is the count of hex digits in an instance id.
+inline constexpr std::size_t incarnation_len = 16;
+
+// Values of the consumer field that are not a procID.
+inline constexpr std::uint64_t consumer_none = 0;
+inline constexpr std::uint64_t consumer_pending = 1;
+// proc_watchable marks a procID with a life socket behind it.
+inline constexpr std::uint64_t proc_watchable = std::uint64_t(1) << 63;
+inline constexpr std::uint64_t proc_any = std::uint64_t(1) << 62;
 inline constexpr std::string_view not_empty_suffix = ".ne";
 inline constexpr std::string_view not_full_suffix = ".nf";
 inline constexpr std::string_view creator_to_opener_suffix = ".c2o";
@@ -55,11 +75,17 @@ inline constexpr std::size_t magic = 0;
 inline constexpr std::size_t version = 8;
 inline constexpr std::size_t flags = 12;
 inline constexpr std::size_t capacity = 16;
+inline constexpr std::size_t consumer = 24;
 inline constexpr std::size_t tail = 128;
 inline constexpr std::size_t head = 256;
 inline constexpr std::size_t head_cache = 384;
 inline constexpr std::size_t recv_waiters = 392;
 inline constexpr std::size_t send_waiters = 396;
+inline constexpr std::size_t slots = control_size;
+// Offsets inside one claim slot.
+inline constexpr std::size_t slot_owner = 0;
+inline constexpr std::size_t slot_at = 8;
+inline constexpr std::size_t slot_claim_size = 16;
 } // namespace offset
 
 } // namespace wire
@@ -89,6 +115,41 @@ inline std::string segment_path(std::string_view name)
 	std::string p(wire::segment_prefix);
 	p.append(name);
 	return p;
+}
+
+inline std::string runtime_path(std::string_view file)
+{
+	std::string p(wire::runtime_dir);
+	p.push_back('/');
+	p.append(file);
+	return p;
+}
+
+// name_path is the file that a creator locks for the life of a queue.
+inline std::string name_path(std::string_view name)
+{
+	return runtime_path(std::string(wire::name_prefix) + std::string(name) + std::string(wire::name_suffix));
+}
+
+// inc_path holds the id of the instance that a name points at.
+inline std::string inc_path(std::string_view name)
+{
+	return runtime_path(std::string(wire::name_prefix) + std::string(name) + std::string(wire::inc_suffix));
+}
+
+inline std::string instance_name(std::string_view name, std::string_view inc)
+{
+	std::string s(name);
+	s.push_back('.');
+	s.append(inc);
+	return s;
+}
+
+inline std::string life_path(std::uint64_t id)
+{
+	char hex[17];
+	std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(id));
+	return runtime_path(std::string(wire::life_prefix) + hex + std::string(wire::life_suffix));
 }
 
 [[noreturn]] inline void fatal(const char *what, int err)
