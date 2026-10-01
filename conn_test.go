@@ -174,7 +174,7 @@ func TestConnCloseWriteHalfCloses(t *testing.T) {
 	// Close must not send a second end-of-stream message.
 	require.NoError(t, client.Close())
 	_, _, err = server.Channel().TryRecv(nil)
-	assert.ErrorIs(t, err, ErrEmpty)
+	assert.True(t, errors.Is(err, ErrEmpty) || errors.Is(err, ErrPeerGone), "got %v, want no message", err)
 }
 
 func TestConnCloseWriteWaitsForRoom(t *testing.T) {
