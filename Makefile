@@ -63,10 +63,12 @@ build-c: gen
 build-cpp: gen
 	+$(SUBMAKE) -C cpp build
 
-test-c: gen
+# Sub-makes in one directory race on the same outputs, so each test runs
+# after the build in its directory.
+test-c: build-c
 	+$(SUBMAKE) -C c test
 
-test-cpp: gen
+test-cpp: build-cpp
 	+$(SUBMAKE) -C cpp test
 
 test-py: build-c gen
