@@ -357,24 +357,26 @@ int goipc_queue_claim(goipc_queue *q, uint32_t type, size_t len, int64_t timeout
 	return rc;
 }
 
-void goipc_queue_commit(goipc_queue *q, goipc_claim *c)
+int goipc_queue_commit(goipc_queue *q, goipc_claim *c)
 {
 	if (!goipc__gate_enter(&q->gate))
-		return;
+		return GOIPC_ECLOSED;
 	goipc_claim_commit(c);
-	wake_receiver(q);
+	int rc = wake_receiver(q);
 	goipc__gate_leave(&q->gate);
+	return rc;
 }
 
 /* An abort frees nothing until the receiver steps over the padding, so it
  * wakes the receiver like a commit does. */
-void goipc_queue_abort(goipc_queue *q, goipc_claim *c)
+int goipc_queue_abort(goipc_queue *q, goipc_claim *c)
 {
 	if (!goipc__gate_enter(&q->gate))
-		return;
+		return GOIPC_ECLOSED;
 	goipc_claim_abort(c);
-	wake_receiver(q);
+	int rc = wake_receiver(q);
 	goipc__gate_leave(&q->gate);
+	return rc;
 }
 
 int goipc_queue_try_recv(goipc_queue *q, void *dst, size_t cap, uint32_t *type, size_t *len)
