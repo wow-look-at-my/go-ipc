@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, Tuple
 from . import _util
 from ._lib import READ_FN, ClaimStruct, RingStruct, lib
 from .errors import BufferTooSmall, CallbackError, error_for
-from .wire import RING_FIELDS
+from .wire import CLAIM_SLOT_FIELDS, CLAIM_SLOT_SIZE, CLAIM_SLOTS, CLAIM_SLOTS_OFFSET, RING_FIELDS
 
 ReadFunc = Callable[[int, memoryview], Any]
 
@@ -84,6 +84,11 @@ class Claim:
 
 	def __len__(self) -> int:
 		return int(self._struct.len)
+
+	@property
+	def slot(self) -> int:
+		"""The claim slot that names this process as the owner, or -1 for a raw ring claim."""
+		return int(self._struct.slot)
 
 	def _finish(self) -> None:
 		if self._done:
@@ -181,6 +186,17 @@ class Ring:
 			return ctypes.c_int32.from_address(addr).value
 		ctype = ctypes.c_uint64 if size == 8 else ctypes.c_uint32
 		return int(ctype.from_address(addr).value)
+
+	def claim_slot(self, index: int) -> Tuple[int, int, int]:
+		"""Returns (owner, at, size) of claim slot index. For diagnostics and tests."""
+		if not 0 <= index < CLAIM_SLOTS:
+			raise IndexError("claim slot %r is outside 0..%d" % (index, CLAIM_SLOTS - 1))
+		base = self._struct.hdr + CLAIM_SLOTS_OFFSET + index * CLAIM_SLOT_SIZE
+
+		def load(field: str) -> int:
+			return int(ctypes.c_uint64.from_address(base + CLAIM_SLOT_FIELDS[field][0]).value)
+
+		return load("owner"), load("at"), load("size")
 
 	@property
 	def head(self) -> int:

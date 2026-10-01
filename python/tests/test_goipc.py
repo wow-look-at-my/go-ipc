@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import io
+import os
 import struct
 import threading
 import time
@@ -38,6 +40,20 @@ def image(case: dict) -> bytes:
 	return support.spec_file("vectors", "ring", case["name"] + ".bin")
 
 
+def needs_slot_api(case: dict) -> bool:
+	"""Reports whether a case uses a consumer, acquire, drop or an attributed claim."""
+	if int(case.get("consumer", "0x0"), 16) != 0:
+		return True
+	return any(op["op"] in ("acquire", "drop") or "slot" in op for op in case["ops"])
+
+
+# libgoipc exports no init with a consumer, no slot acquire or drop, and no
+# claim with a slot on a raw ring. So these cases are only attached and read.
+SLOT_CASES = {"slots", "slot_wrap"}
+
+RING_BYTES = goipc.HEADER_SIZE + 4096
+
+
 class VectorTest(unittest.TestCase):
 	def run_op(self, ring: goipc.Ring, buf: bytearray, op: dict) -> None:
 		kind = op["op"]
@@ -68,10 +84,12 @@ class VectorTest(unittest.TestCase):
 			self.fail("unknown op %r" % kind)
 
 	def test_manifest_has_cases(self) -> None:
-		self.assertGreaterEqual(len(CASES), 8)
+		self.assertGreaterEqual(len(CASES), 10)
 
 	def test_replay(self) -> None:
 		for case in CASES:
+			if case["name"] in SLOT_CASES:
+				continue
 			with self.subTest(case=case["name"]):
 				buf = bytearray(case["buffer_size"])
 				ring = goipc.Ring.init(buf)
@@ -79,11 +97,16 @@ class VectorTest(unittest.TestCase):
 					self.run_op(ring, buf, op)
 				self.assertEqual(bytes(buf), image(case))
 
+	def test_slot_cases_are_the_only_ones_not_replayed(self) -> None:
+		need = {c["name"] for c in CASES if needs_slot_api(c)}
+		self.assertEqual(need, SLOT_CASES)
+
 	def test_attach_and_read(self) -> None:
 		for case in CASES:
 			with self.subTest(case=case["name"]):
 				buf = bytearray(image(case))
 				ring = goipc.Ring.attach(buf)
+				self.assertEqual(ring.header_field("consumer"), int(case.get("consumer", "0x0"), 16))
 				self.assertEqual(ring.head, case["head"])
 				self.assertEqual(ring.tail, case["tail"])
 				want = [(r["type"], payload(r)) for r in case["records"]]
@@ -92,8 +115,8 @@ class VectorTest(unittest.TestCase):
 
 class RingTest(unittest.TestCase):
 	def test_size_and_properties(self) -> None:
-		self.assertEqual(goipc.Ring.size(4096), 4608)
-		buf = bytearray(9000)
+		self.assertEqual(goipc.Ring.size(4096), RING_BYTES)
+		buf = bytearray(goipc.HEADER_SIZE + 8192 + 296)
 		ring = goipc.Ring.init(buf)
 		self.assertIs(ring.buffer, buf)
 		self.assertEqual(ring.capacity, 8192)
@@ -106,17 +129,17 @@ class RingTest(unittest.TestCase):
 
 	def test_layout_errors(self) -> None:
 		with self.assertRaises(goipc.TooSmall):
-			goipc.Ring.init(bytearray(512 + 100))
+			goipc.Ring.init(bytearray(goipc.HEADER_SIZE + 100))
 		with self.assertRaises(goipc.BadLayout):
-			goipc.Ring.attach(bytearray(4608))
-		unaligned = memoryview(bytearray(4608 + 8))[1:4609]
+			goipc.Ring.attach(bytearray(RING_BYTES))
+		unaligned = memoryview(bytearray(RING_BYTES + 8))[1 : RING_BYTES + 1]
 		with self.assertRaises(goipc.Unaligned):
 			goipc.Ring.init(unaligned)
 		with self.assertRaises(TypeError):
-			goipc.Ring.init(bytes(4608))
+			goipc.Ring.init(bytes(RING_BYTES))
 
 	def test_corrupt_length(self) -> None:
-		buf = bytearray(4608)
+		buf = bytearray(RING_BYTES)
 		ring = goipc.Ring.init(buf)
 		ring.try_write(1, b"x")
 		struct.pack_into("<i", buf, goipc.HEADER_SIZE, 3)
@@ -124,7 +147,7 @@ class RingTest(unittest.TestCase):
 			drain(ring)
 
 	def test_buffer_too_small_keeps_the_record(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		ring.try_write(4, b"y" * 100)
 		with self.assertRaises(goipc.BufferTooSmall) as cm:
 			ring.try_recv(bytearray(10))
@@ -136,7 +159,7 @@ class RingTest(unittest.TestCase):
 			ring.try_recv(dst)
 
 	def test_payload_kinds(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		ring.try_write(1, b"bytes")
 		ring.try_write(2, bytearray(b"bytearray"))
 		ring.try_write(3, memoryview(b"xxview")[2:])
@@ -144,7 +167,7 @@ class RingTest(unittest.TestCase):
 		self.assertEqual(drain(ring), [(1, b"bytes"), (2, b"bytearray"), (3, b"view"), (4, b"")])
 
 	def test_read_limit(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		for i in range(5):
 			ring.try_write(i, b"%d" % i)
 		self.assertEqual(drain(ring, 2), [(0, b"0"), (1, b"1")])
@@ -152,7 +175,7 @@ class RingTest(unittest.TestCase):
 		self.assertEqual(len(drain(ring)), 3)
 
 	def test_callback_error_is_raised(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		ring.try_write(1, b"a")
 
 		def boom(t: int, p: memoryview) -> None:
@@ -168,7 +191,7 @@ class RingTest(unittest.TestCase):
 		self.assertIsInstance(cm.exception.__cause__, KeyError)
 
 	def test_payload_view_ends_with_the_call(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		ring.try_write(1, b"abc")
 		kept: List[memoryview] = []
 		ring.read(None, lambda t, p: kept.append(p))
@@ -178,7 +201,7 @@ class RingTest(unittest.TestCase):
 
 class ClaimTest(unittest.TestCase):
 	def test_context_manager_commits(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		with ring.try_claim(5, 3) as claim:
 			claim.buffer[:] = b"abc"
 		self.assertTrue(claim.done)
@@ -187,7 +210,7 @@ class ClaimTest(unittest.TestCase):
 		self.assertEqual(drain(ring), [(5, b"abc")])
 
 	def test_context_manager_aborts_on_exception(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		with self.assertRaises(RuntimeError):
 			with ring.try_claim(5, 3) as claim:
 				claim.buffer[:] = b"abc"
@@ -196,7 +219,7 @@ class ClaimTest(unittest.TestCase):
 		self.assertTrue(ring.empty)
 
 	def test_open_claim_stalls_the_reader(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		claim = ring.try_claim(1, 1)
 		ring.try_write(2, b"z")
 		self.assertEqual(drain(ring), [])
@@ -207,7 +230,7 @@ class ClaimTest(unittest.TestCase):
 			claim.commit()
 
 	def test_claim_errors(self) -> None:
-		ring = goipc.Ring.init(bytearray(4608))
+		ring = goipc.Ring.init(bytearray(RING_BYTES))
 		with self.assertRaises(goipc.ReservedType):
 			ring.try_claim(goipc.TYPE_PADDING, 1)
 		with self.assertRaises(goipc.MessageTooLarge):
@@ -495,6 +518,148 @@ class ChannelTest(Named):
 		self.assertIsInstance(receiver.finish_error(self), goipc.Closed)
 
 
+class PeerTest(Named):
+	"""Peer-gone, in-use, not-consumer and claim slots within one process."""
+
+	def opened(self, name: str) -> goipc.Queue:
+		q = goipc.Queue.open(name)
+		self.addCleanup(q.close)
+		return q
+
+	def test_receiver_close_makes_senders_peer_gone(self) -> None:
+		q = self.queue("pg")
+		s = self.opened(q.name)
+		s.send(b"before", timeout=support.BOUND)
+		q.close()
+		with self.assertRaises(goipc.PeerGone):
+			s.send(b"x", timeout=support.BOUND)
+		with self.assertRaises(goipc.PeerGone):
+			s.try_send(b"x")
+		with self.assertRaises(goipc.PeerGone):
+			s.claim(1, 1, timeout=support.BOUND)
+		with self.assertRaises(goipc.PeerGone):
+			goipc.Queue.open(q.name)
+
+	def test_receiver_close_wakes_a_parked_sender(self) -> None:
+		q = self.queue("pgw")
+		s = self.opened(q.name)
+		self.fill(s)
+		sender = support.start(lambda: s.send(b"x" * 100, timeout=support.BOUND), "sender")
+		deadline = time.monotonic() + support.BOUND
+		while q.ring.header_field("send_waiters") == 0:
+			if time.monotonic() > deadline:
+				self.fail("the sender never parked")
+		q.close()
+		self.assertIsInstance(sender.finish_error(self), goipc.PeerGone)
+
+	def test_second_create_is_in_use(self) -> None:
+		q = self.queue("iu")
+		with self.assertRaises(goipc.InUse):
+			goipc.Queue.create(q.name, CAP)
+		with self.assertRaises(goipc.InUse):
+			goipc.Channel.create(q.name, CAP)
+
+	def test_recv_on_an_opened_handle_is_not_consumer(self) -> None:
+		q = self.queue("nc")
+		s = self.opened(q.name)
+		s.send(b"m")
+		with self.assertRaises(goipc.NotConsumer):
+			s.try_recv()
+		with self.assertRaises(goipc.NotConsumer):
+			s.recv(timeout=support.BOUND)
+		with self.assertRaises(goipc.NotConsumer):
+			s.recv_into(bytearray(16), timeout=support.BOUND)
+		with self.assertRaises(goipc.NotConsumer):
+			s.read_batch(None, lambda t, p: None, timeout=support.BOUND)
+		self.assertEqual(q.try_recv(), (0, b"m"))
+
+	def test_not_ready_name(self) -> None:
+		name = support.unique_name("nr")
+		path = goipc.wire.NAME_FILE_PATH.format(name=name)
+		# The lock stands for a create in progress and keeps a sweep off the file.
+		fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+		self.addCleanup(os.unlink, path)
+		self.addCleanup(os.close, fd)
+		fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+		with self.assertRaises(goipc.SystemCallError) as cm:
+			goipc.Queue.open(name)
+		self.assertEqual(cm.exception.errno, errno.EAGAIN)
+		with self.assertRaises(goipc.InUse):
+			goipc.Queue.create(name, CAP)
+
+	def test_queue_claim_takes_a_slot(self) -> None:
+		q = self.queue("cs")
+		ring = q.ring
+		me = ring.header_field("consumer")
+		self.assertTrue(me >> goipc.wire.PROC_ALWAYS_SET_BIT & 1, hex(me))
+		c = q.claim(1, 4, timeout=support.BOUND)
+		self.assertGreaterEqual(c.slot, 0)
+		self.assertEqual(ring.claim_slot(c.slot), (me, 0, 16))
+		c.buffer[:] = b"abcd"
+		c.commit()
+		self.assertEqual(ring.claim_slot(c.slot), (me, goipc.wire.NO_INTENT, 16))
+		with q.claim(2, 0) as again:
+			self.assertEqual(again.slot, c.slot, "an idle slot of the handle is reused")
+		self.assertEqual(goipc.Ring.init(bytearray(RING_BYTES)).try_claim(1, 1).slot, -1)
+
+	def test_too_many_claims(self) -> None:
+		q = self.queue("tm")
+		claims = [q.claim(1, 0, timeout=0) for _ in range(goipc.wire.CLAIM_SLOTS)]
+		self.assertEqual(sorted(c.slot for c in claims), list(range(goipc.wire.CLAIM_SLOTS)))
+		with self.assertRaises(goipc.TooManyClaims):
+			q.claim(1, 0, timeout=0)
+		with self.assertRaises(goipc.TooManyClaims):
+			q.try_send(b"x")
+		for c in claims:
+			c.abort()
+		q.send(b"after", timeout=support.BOUND)
+		self.assertEqual(q.recv(timeout=support.BOUND), (0, b"after"))
+
+	def test_channel_has_one_peer(self) -> None:
+		name = support.unique_name("c1")
+		a = goipc.Channel.create(name, CAP)
+		self.addCleanup(a.close)
+		self.addCleanup(a.unlink)
+		b = goipc.Channel.open(name)
+		self.addCleanup(b.close)
+		with self.assertRaises(goipc.InUse):
+			goipc.Channel.open(name)
+
+	def test_channel_peer_close_is_peer_gone_after_the_last_message(self) -> None:
+		name = support.unique_name("cg")
+		a = goipc.Channel.create(name, CAP)
+		self.addCleanup(a.close)
+		self.addCleanup(a.unlink)
+		b = goipc.Channel.open(name)
+		for i in range(3):
+			b.send(b"0:%d" % i, type=i, timeout=support.BOUND)
+		b.close()
+		for i in range(3):
+			self.assertEqual(a.recv(timeout=support.BOUND), (i, b"0:%d" % i))
+		with self.assertRaises(goipc.PeerGone):
+			a.recv(timeout=support.BOUND)
+		with self.assertRaises(goipc.PeerGone):
+			a.send(b"x", timeout=support.BOUND)
+
+	def test_channel_creator_close_is_peer_gone_for_the_opener(self) -> None:
+		name = support.unique_name("cg2")
+		a = goipc.Channel.create(name, CAP)
+		self.addCleanup(a.close)
+		self.addCleanup(a.unlink)
+		b = goipc.Channel.open(name)
+		self.addCleanup(b.close)
+		receiver = support.start(lambda: b.recv(timeout=support.BOUND), "receiver")
+		receiver.started_fn.wait(support.BOUND)
+		a.send(b"last", type=7, timeout=support.BOUND)
+		self.assertEqual(receiver.finish(self), (7, b"last"))
+		receiver = support.start(lambda: b.recv(timeout=support.BOUND), "receiver")
+		receiver.started_fn.wait(support.BOUND)
+		a.close()
+		self.assertIsInstance(receiver.finish_error(self), goipc.PeerGone)
+		with self.assertRaises(goipc.PeerGone):
+			goipc.Channel.open(name)
+
+
 class LifetimeTest(Named):
 	def test_collected_handles_are_destroyed(self) -> None:
 		q = goipc.Queue.create(support.unique_name("gc"), CAP)
@@ -700,12 +865,109 @@ class ProcessTest(Named):
 		conn.close()
 		echo.finish(self)
 
+	def test_recover_cell(self) -> None:
+		k = 200
+		name = support.unique_name("rc")
+		recv = support.Peer("recv", name, 2 * k, CAP)
+		recv.wait_ready(self)
+		for args in (("claim-and-die", name, 64), ("send", name, "0", k), ("claim-and-die", name, 1500), ("send", name, "1", k)):
+			self.assertEqual(support.Peer(*args).finish(self), [], args)
+		self.assertEqual(recv.finish(self), ["ok %d" % (2 * k)])
+
+	def test_this_process_recovers_dead_claims(self) -> None:
+		q = self.queue("rc2")
+		support.Peer("claim-and-die", q.name, 64).finish(self)
+		ring = q.ring
+		self.assertEqual(ring.tail, 72)
+		q.send(b"live", type=3, timeout=support.BOUND)
+		self.assertEqual(q.recv(timeout=support.BOUND), (3, b"live"))
+		self.assertEqual(ring.head, ring.tail)
+
+	def test_receiver_gone_cell(self) -> None:
+		k = 300
+		for mode in ("close", "exit"):
+			with self.subTest(mode=mode):
+				name = support.unique_name("rg")
+				recv = support.Peer("recv-then-stop", name, k, CAP, mode)
+				recv.wait_ready(self)
+				sender = support.Peer("send-until-gone", name, "0")
+				self.assertEqual(recv.finish(self), ["ok %d" % k])
+				lines = sender.finish(self)
+				self.assertEqual(len(lines), 1, lines)
+				word, n = lines[0].split()
+				self.assertEqual(word, "gone")
+				self.assertGreaterEqual(int(n), k)
+
+	def test_this_process_sees_the_receiver_exit(self) -> None:
+		k = 50
+		name = support.unique_name("rg2")
+		recv = support.Peer("recv-then-stop", name, k, CAP, "exit")
+		recv.wait_ready(self)
+		q = goipc.Queue.open(name)
+		self.addCleanup(q.close)
+		for i in range(k):
+			q.send(b"py:%d" % i, type=i, timeout=support.BOUND)
+		self.assertEqual(recv.finish(self), ["ok %d" % k])
+		with self.assertRaises(goipc.PeerGone):
+			while True:
+				q.send(b"after", timeout=support.BOUND)
+
+	def test_second_creator_is_in_use_while_the_first_process_lives(self) -> None:
+		name = support.unique_name("iu2")
+		recv = support.Peer("recv", name, 1, CAP)
+		recv.wait_ready(self)
+		with self.assertRaises(goipc.InUse):
+			goipc.Queue.create(name, CAP)
+		with goipc.Queue.open(name) as q:
+			with self.assertRaises(goipc.NotConsumer):
+				q.try_recv()
+			q.send(b"py:0", timeout=support.BOUND)
+		self.assertEqual(recv.finish(self), ["ok 1"])
+		after = goipc.Queue.create(name, CAP)
+		after.unlink()
+		after.close()
+
+	def test_channel_peer_gone_cell(self) -> None:
+		k = 300
+		for mode in ("close", "exit"):
+			with self.subTest(mode=mode):
+				name = support.unique_name("cpg")
+				recv = support.Peer("chan-recv-until-gone", name, CAP, k)
+				recv.wait_ready(self)
+				support.Peer("chan-send-then-stop", name, k, mode).finish(self)
+				self.assertEqual(recv.finish(self), ["ok %d" % k])
+
+	def test_channel_peer_exit_is_peer_gone_after_the_last_message(self) -> None:
+		k = 40
+		for mode in ("close", "exit"):
+			with self.subTest(mode=mode):
+				name = support.unique_name("cpg2")
+				c = goipc.Channel.create(name, CAP)
+				self.addCleanup(c.close)
+				self.addCleanup(c.unlink)
+				peer = support.Peer("chan-send-then-stop", name, k, mode)
+				for i in range(k):
+					self.assertEqual(c.recv(timeout=support.BOUND), (i, b"0:%d" % i))
+				with self.assertRaises(goipc.PeerGone):
+					c.recv(timeout=support.BOUND)
+				with self.assertRaises(goipc.PeerGone):
+					c.send(b"x", timeout=support.BOUND)
+				peer.finish(self)
+
 	def test_peer_failures_exit_1(self) -> None:
+		closed = goipc.Queue.create(support.unique_name("closed"), CAP)
+		self.addCleanup(closed.unlink)
+		closed.close()
 		for args in (
 			("dial-check", support.unique_name("absent"), 10),
 			("typed-send", "x"),
 			("no-such-role",),
 			("recv", "x", "many", 4096),
+			("claim-and-die", support.unique_name("absent"), 8),
+			("send-until-gone", support.unique_name("absent"), "s"),
+			("send-until-gone", closed.name, "s"),
+			("recv-then-stop", support.unique_name("mode"), 1, 4096, "linger"),
+			("chan-send-then-stop", support.unique_name("absent"), 1, "close"),
 			(),
 		):
 			with self.subTest(args=args):

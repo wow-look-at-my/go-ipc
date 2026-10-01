@@ -28,6 +28,8 @@ class ClaimStruct(ctypes.Structure):
 		("ring", ctypes.c_void_p),
 		("index", ctypes.c_uint64),
 		("total", ctypes.c_int32),
+		# The claim slot of a queue claim, or -1 for a raw ring claim.
+		("slot", ctypes.c_int32),
 		("bytes", ctypes.c_void_p),
 		("len", ctypes.c_size_t),
 	]

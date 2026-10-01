@@ -22,6 +22,7 @@ class WireConstantsTest(unittest.TestCase):
 		self.assertEqual(wire.SPEC_VERSION, self.spec["spec_version"])
 		self.assertEqual(wire.RING_MAGIC, int(r["magic"], 16))
 		self.assertEqual(wire.RING_VERSION, r["version"])
+		self.assertEqual(wire.CONTROL_SIZE, r["control_size"])
 		self.assertEqual(wire.HEADER_SIZE, r["header_size"])
 		self.assertEqual(wire.CACHE_LINE, r["cache_line"])
 		self.assertEqual(wire.MIN_CAPACITY, r["min_capacity"])
@@ -33,11 +34,42 @@ class WireConstantsTest(unittest.TestCase):
 		want = {f["name"]: (f["offset"], f["size"]) for f in self.spec["ring"]["fields"]}
 		self.assertEqual(wire.RING_FIELDS, want)
 
+	def test_claim_slots(self) -> None:
+		s = self.spec["ring"]["claim_slots"]
+		self.assertEqual(wire.CLAIM_SLOTS_OFFSET, s["offset"])
+		self.assertEqual(wire.CLAIM_SLOTS, s["count"])
+		self.assertEqual(wire.CLAIM_SLOT_SIZE, s["slot_size"])
+		self.assertEqual(wire.NO_INTENT, int(s["no_intent"], 16))
+		want = {f["name"]: (f["offset"], f["size"]) for f in s["fields"]}
+		self.assertEqual(wire.CLAIM_SLOT_FIELDS, want)
+		self.assertEqual(wire.CLAIM_SLOTS_OFFSET, wire.CONTROL_SIZE)
+		self.assertEqual(wire.CONTROL_SIZE + wire.CLAIM_SLOTS * wire.CLAIM_SLOT_SIZE, wire.HEADER_SIZE)
+
+	def test_proc_id(self) -> None:
+		p = self.spec["proc_id"]
+		self.assertEqual(wire.PROC_NONE, p["none"])
+		self.assertEqual(wire.PROC_PENDING, p["pending"])
+		self.assertEqual(wire.PROC_WATCHABLE_BIT, p["watchable_bit"])
+		self.assertEqual(wire.PROC_ALWAYS_SET_BIT, p["always_set_bit"])
+
+	def test_paths(self) -> None:
+		p = self.spec["paths"]
+		self.assertEqual(wire.RUNTIME_DIR, p["runtime_dir"])
+		self.assertEqual(wire.FILE_MODE, int(p["file_mode"], 8))
+		self.assertEqual(wire.NAME_FILE_PATH, p["name_file"])
+		self.assertEqual(wire.INSTANCE_FILE_PATH, p["instance_file"])
+		self.assertEqual(wire.INSTANCE_ID_HEX_DIGITS, p["instance_id_hex_digits"])
+		self.assertEqual(wire.SEGMENT_PATH, p["segment"])
+		self.assertEqual(wire.NOT_EMPTY_EVENT_PATH, p["not_empty_event"])
+		self.assertEqual(wire.NOT_FULL_EVENT_PATH, p["not_full_event"])
+		self.assertEqual(wire.EVENT_PATH, p["event"])
+		self.assertEqual(wire.LIFE_SOCKET_PATH, p["life_socket"])
+		self.assertEqual(wire.LIFE_SOCKET_PROCID_HEX_DIGITS, p["life_socket_procid_hex_digits"])
+		self.assertEqual(wire.LIFE_SOCKET_TEMP_SUFFIX, p["life_socket_temp_suffix"])
+
 	def test_queue_channel_conn_constants(self) -> None:
 		q = self.spec["queue"]
 		self.assertEqual(wire.DEFAULT_CAPACITY, q["default_capacity"])
-		self.assertEqual(wire.SEGMENT_PATH, q["segment_path"])
-		self.assertEqual(wire.EVENT_PATH, q["event_path"])
 		self.assertEqual(wire.NOT_EMPTY_SUFFIX, q["not_empty_suffix"])
 		self.assertEqual(wire.NOT_FULL_SUFFIX, q["not_full_suffix"])
 		self.assertEqual(wire.SIGNAL_MAX_TOKENS, q["signal_max_tokens"])
@@ -59,7 +91,7 @@ class WireConstantsTest(unittest.TestCase):
 		self.assertEqual(wire.align8(9), 16)
 		self.assertEqual(wire.max_message_size(4096), 2040)
 		self.assertEqual(wire.max_message_size(2 ** 40), 2 ** 31 - 1 - 8)
-		self.assertEqual(wire.ring_size(4096), 4608)
+		self.assertEqual(wire.ring_size(4096), 20992)
 
 
 class ErrorsTest(unittest.TestCase):
@@ -75,7 +107,10 @@ class ErrorsTest(unittest.TestCase):
 			"EUNALIGNED": goipc.Unaligned, "ETIMEDOUT": goipc.Timeout, "ESYS": goipc.SystemCallError,
 			"ENOMEM": goipc.NoMemory, "EINVAL": goipc.InvalidArgument,
 			"EBUFFER": goipc.BufferTooSmall, "EOF": goipc.EndOfStream,
+			"EPEERGONE": goipc.PeerGone, "EINUSE": goipc.InUse,
+			"ENOTCONSUMER": goipc.NotConsumer, "ETOOMANYCLAIMS": goipc.TooManyClaims,
 		}
+		self.assertEqual(text.count("\tGOIPC_E"), len(names), "goipc.h has an error code this table lacks")
 		for suffix, cls in names.items():
 			marker = "GOIPC_%s = " % suffix
 			self.assertIn(marker, text, suffix)
@@ -97,6 +132,12 @@ class ErrorsTest(unittest.TestCase):
 		self.assertIsInstance(exc, OSError)
 		self.assertEqual(exc.errno, 2)
 		self.assertEqual(exc.code, errors.ESYS)
+
+	def test_peer_gone_is_connection_error(self) -> None:
+		exc = errors.make_error(errors.EPEERGONE, "gone")
+		self.assertIsInstance(exc, goipc.PeerGone)
+		self.assertIsInstance(exc, ConnectionError)
+		self.assertEqual(exc.code, errors.EPEERGONE)
 
 	def test_unknown_code(self) -> None:
 		exc = errors.make_error(-999)
