@@ -7,6 +7,7 @@ Shared-memory IPC for Go, without cgo. Layers: `Ring` (lock-free MPSC records in
 - The ring header layout is a wire format shared between processes. A build-time assertion in `ring.go` fails if its size drifts. Bump `ringVersion` for any field change.
 - `Queue.Close` waits for in-flight operations before it unmaps. Any new method that touches shared memory calls `enter` and `leave` first.
 - An `Event` waiter reads the FIFO on a handle of its own, from a free list. Never share a reader handle. A read deadline cancels a wait, and it aborts every reader of the handle it is set on.
+- A cosmo binary on a Windows host has no FIFO. Its events use the Unix socket backend in `event_sock.go`, where the creator holds the tokens. docs/design.md, section "Events", has the protocol.
 - The consumer clears every byte it consumes. A claimed header reads as zero until its producer writes it. Stale bytes there pass for a record.
 - Every queue claim writes its range into a claim slot before the `tail` swap, and clears it after the commit. The reader finds a dead producer's claim that way.
 - Peer death comes from the peer's life socket (`identity.go`): the kernel ends a connection to it when the process exits. Never detect death with a timeout or a pid.
