@@ -7,7 +7,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -18,25 +20,55 @@ import (
 // GO_IPC_UPDATE_VECTORS=1 rewrites the .bin images from this implementation.
 const updateVectorsEnv = "GO_IPC_UPDATE_VECTORS"
 
+type wireField struct {
+	Name   string  `json:"name"`
+	Offset uintptr `json:"offset"`
+	Size   uintptr `json:"size"`
+}
+
 type wireSpec struct {
-	Ring struct {
-		Magic            string `json:"magic"`
-		Version          uint32 `json:"version"`
-		HeaderSize       int    `json:"header_size"`
-		CacheLine        int    `json:"cache_line"`
-		MinCapacity      int    `json:"min_capacity"`
-		RecordHeaderSize int    `json:"record_header_size"`
-		RecordAlignment  int    `json:"record_alignment"`
-		TypePadding      uint32 `json:"type_padding"`
-		Fields           []struct {
-			Name   string  `json:"name"`
-			Offset uintptr `json:"offset"`
-			Size   uintptr `json:"size"`
-		} `json:"fields"`
+	SpecVersion int `json:"spec_version"`
+	Ring        struct {
+		Magic            string      `json:"magic"`
+		Version          uint32      `json:"version"`
+		ControlSize      int         `json:"control_size"`
+		HeaderSize       int         `json:"header_size"`
+		CacheLine        int         `json:"cache_line"`
+		MinCapacity      int         `json:"min_capacity"`
+		RecordHeaderSize int         `json:"record_header_size"`
+		RecordAlignment  int         `json:"record_alignment"`
+		TypePadding      uint32      `json:"type_padding"`
+		Fields           []wireField `json:"fields"`
+		ClaimSlots       struct {
+			Offset   uintptr     `json:"offset"`
+			Count    int         `json:"count"`
+			SlotSize uintptr     `json:"slot_size"`
+			NoIntent string      `json:"no_intent"`
+			Fields   []wireField `json:"fields"`
+		} `json:"claim_slots"`
 	} `json:"ring"`
+	ProcID struct {
+		None         uint64 `json:"none"`
+		Pending      uint64 `json:"pending"`
+		WatchableBit uint   `json:"watchable_bit"`
+		AlwaysSetBit uint   `json:"always_set_bit"`
+	} `json:"proc_id"`
+	Paths struct {
+		RuntimeDir         string `json:"runtime_dir"`
+		FileMode           string `json:"file_mode"`
+		NameFile           string `json:"name_file"`
+		InstanceFile       string `json:"instance_file"`
+		InstanceIDDigits   int    `json:"instance_id_hex_digits"`
+		Segment            string `json:"segment"`
+		NotEmptyEvent      string `json:"not_empty_event"`
+		NotFullEvent       string `json:"not_full_event"`
+		Event              string `json:"event"`
+		LifeSocket         string `json:"life_socket"`
+		LifeSocketIDDigits int    `json:"life_socket_procid_hex_digits"`
+		LifeSocketTemp     string `json:"life_socket_temp_suffix"`
+	} `json:"paths"`
 	Queue struct {
 		DefaultCapacity int    `json:"default_capacity"`
-		EventPath       string `json:"event_path"`
 		NotEmptySuffix  string `json:"not_empty_suffix"`
 		NotFullSuffix   string `json:"not_full_suffix"`
 		SignalMaxTokens int    `json:"signal_max_tokens"`
@@ -51,16 +83,52 @@ type wireSpec struct {
 	} `json:"conn"`
 }
 
-func TestWireConstantsMatchSpec(t *testing.T) {
+func loadWire(t *testing.T) wireSpec {
+	t.Helper()
 	raw, err := os.ReadFile("spec/wire.json")
 	require.NoError(t, err)
 	var s wireSpec
 	require.NoError(t, json.Unmarshal(raw, &s))
+	return s
+}
 
-	magic, err := strconv.ParseUint(s.Ring.Magic, 0, 64)
-	require.NoError(t, err)
-	assert.Equal(t, ringMagic, magic)
+func parseHex(t *testing.T, s string) uint64 {
+	t.Helper()
+	v, err := strconv.ParseUint(s, 0, 64)
+	require.NoError(t, err, "%q is not a 64-bit number", s)
+	return v
+}
+
+// specPath expands a path of wire.json on this host. The spec names the Linux
+// runtime directory, so the directory part becomes runtimeDir().
+func specPath(t *testing.T, s wireSpec, pattern string, vars map[string]string) string {
+	t.Helper()
+	rest, ok := strings.CutPrefix(pattern, s.Paths.RuntimeDir+"/")
+	require.True(t, ok, "%q is not under %q", pattern, s.Paths.RuntimeDir)
+	for k, v := range vars {
+		rest = strings.ReplaceAll(rest, "{"+k+"}", v)
+	}
+	require.NotContains(t, rest, "{", "%q has a placeholder with no value", pattern)
+	return filepath.Join(runtimeDir(), rest)
+}
+
+func checkFields(t *testing.T, fields []wireField, want map[string][2]uintptr) {
+	t.Helper()
+	require.Len(t, fields, len(want))
+	for _, f := range fields {
+		got, ok := want[f.Name]
+		require.True(t, ok, "spec names an unknown field %q", f.Name)
+		assert.Equal(t, [2]uintptr{f.Offset, f.Size}, got, "field %s", f.Name)
+	}
+}
+
+func TestWireConstantsMatchSpec(t *testing.T) {
+	s := loadWire(t)
+
+	assert.Equal(t, int(ringVersion), s.SpecVersion)
+	assert.Equal(t, ringMagic, parseHex(t, s.Ring.Magic))
 	assert.Equal(t, ringVersion, s.Ring.Version)
+	assert.Equal(t, controlSize, s.Ring.ControlSize)
 	assert.Equal(t, HeaderSize, s.Ring.HeaderSize)
 	assert.Equal(t, cacheLine, s.Ring.CacheLine)
 	assert.Equal(t, MinCapacity, s.Ring.MinCapacity)
@@ -69,27 +137,40 @@ func TestWireConstantsMatchSpec(t *testing.T) {
 	assert.Equal(t, TypePadding, s.Ring.TypePadding)
 
 	var h ringHeader
-	offsets := map[string][2]uintptr{
+	checkFields(t, s.Ring.Fields, map[string][2]uintptr{
 		"magic":        {unsafe.Offsetof(h.magic), unsafe.Sizeof(h.magic)},
 		"version":      {unsafe.Offsetof(h.version), unsafe.Sizeof(h.version)},
 		"flags":        {unsafe.Offsetof(h.flags), unsafe.Sizeof(h.flags)},
 		"capacity":     {unsafe.Offsetof(h.capacity), unsafe.Sizeof(h.capacity)},
+		"consumer":     {unsafe.Offsetof(h.consumer), unsafe.Sizeof(h.consumer)},
 		"tail":         {unsafe.Offsetof(h.tail), unsafe.Sizeof(h.tail)},
 		"head":         {unsafe.Offsetof(h.head), unsafe.Sizeof(h.head)},
 		"head_cache":   {unsafe.Offsetof(h.headCache), unsafe.Sizeof(h.headCache)},
 		"recv_waiters": {unsafe.Offsetof(h.recvWaiters), unsafe.Sizeof(h.recvWaiters)},
 		"send_waiters": {unsafe.Offsetof(h.sendWaiters), unsafe.Sizeof(h.sendWaiters)},
-	}
-	require.Len(t, s.Ring.Fields, len(offsets))
-	for _, f := range s.Ring.Fields {
-		got, ok := offsets[f.Name]
-		require.True(t, ok, "spec names an unknown field %q", f.Name)
-		assert.Equal(t, [2]uintptr{f.Offset, f.Size}, got, "field %s", f.Name)
-	}
+	})
 
+	slots := s.Ring.ClaimSlots
+	assert.Equal(t, unsafe.Offsetof(h.slots), slots.Offset)
+	assert.Equal(t, ClaimSlots, slots.Count)
+	assert.Equal(t, unsafe.Sizeof(claimSlot{}), slots.SlotSize)
+	assert.Equal(t, uint64(noIntent), parseHex(t, slots.NoIntent))
+	assert.Equal(t, s.Ring.HeaderSize, int(slots.Offset)+slots.Count*int(slots.SlotSize))
+	var c claimSlot
+	checkFields(t, slots.Fields, map[string][2]uintptr{
+		"owner": {unsafe.Offsetof(c.owner), unsafe.Sizeof(c.owner)},
+		"at":    {unsafe.Offsetof(c.at), unsafe.Sizeof(c.at)},
+		"size":  {unsafe.Offsetof(c.size), unsafe.Sizeof(c.size)},
+	})
+
+	assert.Equal(t, uint64(noProc), s.ProcID.None)
+	assert.Equal(t, uint64(pendingProc), s.ProcID.Pending)
+	assert.Equal(t, watchable, procID(1)<<s.ProcID.WatchableBit)
+	assert.Equal(t, anyProc, procID(1)<<s.ProcID.AlwaysSetBit)
+
+	assert.Equal(t, incarnationLen, s.Paths.InstanceIDDigits)
+	assert.Equal(t, "0600", s.Paths.FileMode)
 	assert.Equal(t, DefaultCapacity, s.Queue.DefaultCapacity)
-	assert.Equal(t, "/dev/shm/go-ipc-{name}.event", s.Queue.EventPath)
-	assert.Equal(t, "/dev/shm/go-ipc-x.event", eventPath("x"))
 	assert.Equal(t, ".ne", s.Queue.NotEmptySuffix)
 	assert.Equal(t, ".nf", s.Queue.NotFullSuffix)
 	assert.Equal(t, pipeBuf, s.Queue.SignalMaxTokens)
@@ -97,6 +178,33 @@ func TestWireConstantsMatchSpec(t *testing.T) {
 	assert.Equal(t, chanOpenerToCreator, s.Channel.OpenerToCreator)
 	assert.Equal(t, typeStreamData, s.Conn.TypeData)
 	assert.Equal(t, typeStreamEOF, s.Conn.TypeEOF)
+}
+
+func TestPathsMatchSpec(t *testing.T) {
+	s := loadWire(t)
+	const name, id = "q", "0123456789abcdef"
+	vars := map[string]string{"name": name, "id": id}
+
+	assert.Equal(t, specPath(t, s, s.Paths.NameFile, vars), namePath(name))
+	inst := instanceName(name, id)
+	assert.Equal(t, specPath(t, s, s.Paths.NotEmptyEvent, vars), eventPath(inst+s.Queue.NotEmptySuffix))
+	assert.Equal(t, specPath(t, s, s.Paths.NotFullEvent, vars), eventPath(inst+s.Queue.NotFullSuffix))
+	assert.Equal(t, specPath(t, s, s.Paths.Event, map[string]string{"event": "x"}), eventPath("x"))
+
+	pid := procID(0xc0ffee0000000abc)
+	assert.Equal(t, specPath(t, s, s.Paths.LifeSocket, map[string]string{"procid": "c0ffee0000000abc"}), lifePath(pid))
+	low := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(lifePath(procID(0xabc))), "go-ipc-life-"), ".sock")
+	assert.Equal(t, s.Paths.LifeSocketIDDigits, len(low))
+	assert.Equal(t, "0000000000000abc", low)
+
+	for range 64 {
+		id := randomID()
+		assert.True(t, id.watchable())
+		assert.NotZero(t, id&anyProc)
+	}
+	if runtime.GOOS == "linux" {
+		assert.Equal(t, s.Paths.RuntimeDir, runtimeDir())
+	}
 }
 
 type vectorPayload struct {
@@ -120,6 +228,15 @@ type vectorOp struct {
 	Then  string `json:"then"`
 	Limit int    `json:"limit"`
 	Error string `json:"error"`
+	Slot  *int   `json:"slot"`
+	Owner string `json:"owner"`
+}
+
+func (op vectorOp) slot() int {
+	if op.Slot == nil {
+		return -1
+	}
+	return *op.Slot
 }
 
 type vectorRecord struct {
@@ -130,10 +247,18 @@ type vectorRecord struct {
 type vectorCase struct {
 	Name       string         `json:"name"`
 	BufferSize int            `json:"buffer_size"`
+	Consumer   string         `json:"consumer"`
 	Ops        []vectorOp     `json:"ops"`
 	Head       uint64         `json:"head"`
 	Tail       uint64         `json:"tail"`
 	Records    []vectorRecord `json:"records"`
+}
+
+func (c vectorCase) consumer(t *testing.T) uint64 {
+	if c.Consumer == "" {
+		return 0
+	}
+	return parseHex(t, c.Consumer)
 }
 
 var vectorErrors = map[string]error{
@@ -150,17 +275,25 @@ func alignedBuffer(n int) []byte {
 
 func replayVector(t *testing.T, c vectorCase) []byte {
 	buf := alignedBuffer(c.BufferSize)
-	r, err := InitRing(buf)
+	r, err := initRing(buf, procID(c.consumer(t)))
 	require.NoError(t, err)
 
 	for i, op := range c.Ops {
 		payload := op.bytes(t)
 		switch op.Op {
 		case "write":
-			err = r.TryWrite(op.Type, payload)
+			err = r.tryWrite(op.slot(), op.Type, payload)
+		case "acquire":
+			var idx int
+			idx, err = r.acquireSlot(procID(parseHex(t, op.Owner)), func(procID) bool { return false })
+			if err == nil {
+				require.Equal(t, op.slot(), idx, "op %d", i)
+			}
+		case "drop":
+			r.dropSlot(procID(parseHex(t, op.Owner)), op.slot())
 		case "claim":
 			var cl Claim
-			cl, err = r.TryClaim(op.Type, len(payload))
+			cl, err = r.tryClaim(op.slot(), op.Type, len(payload))
 			if err == nil {
 				copy(cl.Bytes, payload)
 				switch op.Then {
@@ -215,6 +348,7 @@ func TestRingVectors(t *testing.T) {
 			copy(attached, want)
 			r, err := AttachRing(attached)
 			require.NoError(t, err)
+			assert.Equal(t, c.consumer(t), r.hdr.consumer.Load())
 			assert.Equal(t, c.Head, r.hdr.head.Load())
 			assert.Equal(t, c.Tail, r.hdr.tail.Load())
 
