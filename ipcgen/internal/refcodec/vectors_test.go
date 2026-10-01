@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/go-containers/set"
 	"github.com/wow-look-at-my/go-ipc/ipcgen/internal/schema"
 )
 
@@ -97,12 +98,12 @@ func TestInvalid(t *testing.T) {
 // TestVectorCoverage checks that the vectors exercise every feature that spec/schema.md defines.
 func TestVectorCoverage(t *testing.T) {
 	s := loadSchema(t)
-	kinds := map[string]bool{}
+	kinds := set.New[string]()
 	var mark func(t *schema.Type)
 	mark = func(t *schema.Type) {
-		kinds[t.Kind.String()] = true
+		kinds.Add(t.Kind.String())
 		if t.Kind == schema.Array {
-			kinds["array of "+t.Elem.Kind.String()] = true
+			kinds.Add("array of " + t.Elem.Kind.String())
 			mark(t.Elem)
 		}
 	}
@@ -112,20 +113,20 @@ func TestVectorCoverage(t *testing.T) {
 			mark(f.Type)
 			if !f.IsVar() {
 				if f.Offset > end {
-					kinds["padding"] = true
+					kinds.Add("padding")
 				}
 				end = f.Offset + f.Type.Size()
 			}
 		}
 		switch {
 		case m.FixedSize > end:
-			kinds["tail padding"] = true
+			kinds.Add("tail padding")
 		case len(m.Fields) == 0:
-			kinds["no fields"] = true
+			kinds.Add("no fields")
 		case m.FixedSize == 0:
-			kinds["only variable fields"] = true
+			kinds.Add("only variable fields")
 		case m.Fixed():
-			kinds["no variable fields"] = true
+			kinds.Add("no variable fields")
 		}
 	}
 	want := []string{"padding", "tail padding", "no fields", "only variable fields", "no variable fields",
@@ -134,26 +135,26 @@ func TestVectorCoverage(t *testing.T) {
 		want = append(want, k.String())
 	}
 	for _, k := range want {
-		assert.True(t, kinds[k], "example.ipc does not cover %s", k)
+		assert.True(t, kinds.Contains(k), "example.ipc does not cover %s", k)
 	}
 
 	var values []valueEntry
 	readJSON(t, "values.json", &values)
 	var invalid []invalidEntry
 	readJSON(t, "invalid.json", &invalid)
-	valued, broken, errs := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	valued, broken, errs := set.New[string](), set.New[string](), set.New[string]()
 	for _, e := range values {
-		valued[e.Message] = true
+		valued.Add(e.Message)
 	}
 	for _, e := range invalid {
-		broken[e.Message] = true
-		errs[e.Error] = true
+		broken.Add(e.Message)
+		errs.Add(e.Error)
 	}
 	for _, m := range s.Messages {
-		assert.True(t, valued[m.Name], "values.json has no value for %s", m.Name)
-		assert.True(t, broken[m.Name], "invalid.json has no entry for %s", m.Name)
+		assert.True(t, valued.Contains(m.Name), "values.json has no value for %s", m.Name)
+		assert.True(t, broken.Contains(m.Name), "invalid.json has no entry for %s", m.Name)
 	}
 	for _, k := range []string{ErrShort, ErrLength, ErrTrailing, ErrBool, ErrUTF8} {
-		assert.True(t, errs[k], "invalid.json has no %s entry", k)
+		assert.True(t, errs.Contains(k), "invalid.json has no %s entry", k)
 	}
 }

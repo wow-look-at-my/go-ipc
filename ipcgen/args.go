@@ -1,9 +1,12 @@
 package main
 
-import "strings"
+import (
+	"github.com/wow-look-at-my/go-containers/set"
+	"strings"
+)
 
 // longFlags are the flags that may also be spelled with one dash, as the Go flag package allows.
-var longFlags = map[string]bool{"lang": true, "out": true}
+var longFlags = set.Of[string]("lang", "out")
 
 // normalizeArgs rewrites -lang and -out to --lang and --out. Arguments after "--" stay as they are.
 func normalizeArgs(args []string) []string {
@@ -15,7 +18,7 @@ func normalizeArgs(args []string) []string {
 		}
 		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") {
 			name, _, _ := strings.Cut(a[1:], "=")
-			if longFlags[name] {
+			if longFlags.Contains(name) {
 				out[i] = "-" + a
 			}
 		}
