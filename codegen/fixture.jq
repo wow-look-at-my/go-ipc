@@ -75,7 +75,7 @@ def check:
 	else
 		"static void fx_build_\($i)(\(cname($m)) *v) {\n\tmemset(v, 0, sizeof *v);\n"
 		+ ($leaves | map(store + "\n") | join(""))
-		+ "}\n\nstatic int fx_check_\($i)(const \(cname($m)) *d) {\n\tint ok = 1;\n"
+		+ "}\n\nstatic int fx_check_\($i)(const \(cname($m)) *d) {\n\tint ok = 1;\n\t(void)d;\n"
 		+ ($leaves | map(check + "\n") | join(""))
 		+ "\treturn ok;\n}\n"
 	end
