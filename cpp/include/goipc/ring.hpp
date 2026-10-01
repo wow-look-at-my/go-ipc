@@ -321,7 +321,8 @@ public:
 					break;
 				count++;
 			}
-			// Zeroing before head moves keeps the slot unreadable on the next lap until its new producer commits.
+			// A later header can land on this payload before its producer stores it.
+			std::memset(rec + 4, 0, step - 4);
 			detail::length_at(rec).store(0);
 			consumed += step;
 		}
