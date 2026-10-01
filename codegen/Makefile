@@ -10,9 +10,10 @@ OUT := $(CURDIR)/build
 SANITIZE := -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g
 CC := cc
 CXX := c++
-PYTHON := python3
+include $(ROOT)/python/versions.mk
+PY_TESTS := $(addprefix test-py-,$(PY_VERSIONS))
 
-.PHONY: test test-c test-cpp test-py prepare clean require FORCE
+.PHONY: test test-c test-cpp test-py $(PY_TESTS) prepare clean require FORCE
 
 test: test-c test-cpp test-py
 
@@ -45,9 +46,15 @@ test-cpp: $(OUT)/cpp/fixture.h
 		cpp/test.cpp -o $(OUT)/cpp/test
 	$(OUT)/cpp/test
 
-test-py: $(OUT)/schema.json
+# The generated Python runs on every supported CPython, so it is tested on each.
+test-py: $(PY_TESTS)
+
+$(PY_TESTS): test-py-%: $(OUT)/schema.json
+	@uv python find --no-project $* >/dev/null 2>&1 || { \
+		echo "python $*: interpreter not installed; run 'make -C python interpreters'" >&2; \
+		exit 1; }
 	cd py && PYTHONPATH=$(GEN_DIR)/py IPCGEN_VECTORS=$(VECTORS) IPCGEN_SCHEMA_JSON=$(OUT)/schema.json \
-		$(PYTHON) -m unittest -v test_demo
+		uv run --no-project --no-python-downloads --python $* python -m unittest -v test_demo
 
 prepare: require
 	cp $(GEN_DIR)/go/demo/demo.go go/demo/demo.go

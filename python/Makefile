@@ -1,6 +1,6 @@
 # Runs the goipc suite under every supported CPython. Each version is its own
 # target, so `make -j` runs them in parallel.
-PY_VERSIONS ?= 3.8 3.9 3.10 3.11 3.12 3.13 3.14
+include $(dir $(lastword $(MAKEFILE_LIST)))versions.mk
 # A narrower glob, such as test_wire.py, runs part of the suite.
 PATTERN ?= test*.py
 # Extra unittest arguments, such as -k QueueTest.
