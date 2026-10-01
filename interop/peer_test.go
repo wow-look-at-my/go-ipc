@@ -69,7 +69,7 @@ func runPeer(args []string) error {
 		if err != nil {
 			return fmt.Errorf("bytes: %w", err)
 		}
-		return peerDialCheck(ctx, rest[0], n)
+		return peerDialCheck(rest[0], n)
 	default:
 		return fmt.Errorf("unknown role %q", role)
 	}
@@ -160,7 +160,7 @@ func pattern(n int) []byte {
 	return b
 }
 
-func peerDialCheck(ctx context.Context, name string, n int) error {
+func peerDialCheck(name string, n int) error {
 	conn, err := ipc.Dial(name)
 	if err != nil {
 		return err
@@ -170,31 +170,29 @@ func peerDialCheck(ctx context.Context, name string, n int) error {
 		return err
 	}
 
+	// The ring holds less than the stream, so the write runs beside the read.
 	want := pattern(n)
 	written := make(chan error, 1)
 	go func() {
-		_, werr := conn.Write(want)
-		written <- werr
+		if _, werr := conn.Write(want); werr != nil {
+			written <- fmt.Errorf("write: %w", werr)
+			return
+		}
+		if werr := conn.CloseWrite(); werr != nil {
+			written <- fmt.Errorf("close write: %w", werr)
+			return
+		}
+		written <- nil
 	}()
-	got := make([]byte, n)
-	if _, err := io.ReadFull(conn, got); err != nil {
+	got, err := io.ReadAll(conn)
+	if err != nil {
 		return fmt.Errorf("read echo: %w", err)
 	}
 	if err := <-written; err != nil {
-		return fmt.Errorf("write: %w", err)
+		return err
 	}
 	if i := firstDiff(want, got); i >= 0 {
-		return fmt.Errorf("echo differs at byte %d: got %d, want %d", i, got[i], want[i])
-	}
-
-	// Conn has no half close, so the peer sends the end-of-stream message that
-	// Close sends.
-	if err := conn.Channel().SendTyped(ctx, 1, nil); err != nil {
-		return fmt.Errorf("send end of stream: %w", err)
-	}
-	extra, err := conn.Read(make([]byte, 1))
-	if err != io.EOF {
-		return fmt.Errorf("read after end of stream: %d bytes, error %v, want io.EOF", extra, err)
+		return fmt.Errorf("echo of %d bytes differs from the %d sent, at byte %d", len(got), len(want), i)
 	}
 	return nil
 }

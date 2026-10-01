@@ -13,26 +13,29 @@ permissions:
   artifact-metadata: write
 
 jobs:
+  # The root go-toolchain run also covers interop/, which drives the C, C++ and Python peers. So `make native` builds and tests those first, and the action runs last with the peers in place.
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: wow-look-at-my/go-toolchain@master
-        with:
-          # A library has no main package, so a release has nothing to carry.
-          autorelease: false
-
-  # Builds every implementation and runs the cross-language matrix.
-  matrix:
     runs-on: ubuntu-latest
     env:
       # go-toolchain submits a dependency snapshot in CI and needs a token for it.
       GITHUB_TOKEN: ${{ github.token }}
+      GOIPC_SPEC_DIR: ${{ github.workspace }}/spec
+      GOIPC_LIBRARY: ${{ github.workspace }}/c/build/libgoipc.so
+      GOIPC_PEER_C: ${{ github.workspace }}/c/build/goipc-peer
+      GOIPC_PEER_CPP: ${{ github.workspace }}/cpp/build/goipc-peer
+      GOIPC_PEER_PY: python3 -m goipc.peer
+      PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}/build/gen/py
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - run: sudo curl -fL --compressed "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64" -o /usr/local/bin/go-toolchain
       - run: sudo chmod +x /usr/local/bin/go-toolchain
       - run: sudo apt-get update && sudo apt-get install -y libgtest-dev jq
       - run: pipx install uv
       - run: make -C python interpreters
-      - run: make test
+      - run: make native
+      - uses: wow-look-at-my/go-toolchain@master
+        with:
+          # A library has no main package, so a release has nothing to carry.
+          autorelease: false
