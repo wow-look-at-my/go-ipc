@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -179,10 +180,14 @@ func (c *Conn) CloseWrite() error {
 	if c.eofSent.Load() {
 		return net.ErrClosed
 	}
-	ctx, cancel := c.deadlineContext(&c.writeDeadline)
-	defer cancel()
-	if err := c.ch.SendTyped(ctx, typeStreamEOF, nil); err != nil {
-		return c.translate(err)
+	ctx, done, err := c.writeDeadline.begin(c.base)
+	if err != nil {
+		return err
+	}
+	err = c.translate(ctx, c.ch.SendTyped(ctx, typeStreamEOF, nil))
+	done()
+	if err != nil {
+		return err
 	}
 	c.eofSent.Store(true)
 	return nil
