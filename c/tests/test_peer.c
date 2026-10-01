@@ -16,19 +16,24 @@ struct proc {
 	int out;
 };
 
-static struct proc spawn(const char *const argv[])
+static struct proc spawn_fd(const char *const argv[], int target)
 {
 	int fds[2];
 	REQUIRE(pipe2(fds, O_CLOEXEC) == 0);
 	pid_t pid = fork();
 	REQUIRE(pid >= 0);
 	if (pid == 0) {
-		dup2(fds[1], STDOUT_FILENO);
+		dup2(fds[1], target);
 		execv(GOIPC_PEER_PATH, (char *const *)argv);
 		_exit(127);
 	}
 	close(fds[1]);
 	return (struct proc){pid, fds[0]};
+}
+
+static struct proc spawn(const char *const argv[])
+{
+	return spawn_fd(argv, STDOUT_FILENO);
 }
 
 /* read_output returns what the process wrote, up to and including the first
@@ -105,16 +110,17 @@ TEST(peer_fails_on_bad_usage, T_FORK)
 	const char *unknown[] = {"goipc-peer", "fly", NULL};
 	const char *short_args[] = {"goipc-peer", "recv", "x", NULL};
 	const char *bad_number[] = {"goipc-peer", "send", "x", "a", "ten", NULL};
-	const char *const *cases[] = {no_role, unknown, short_args, bad_number};
-	for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-		struct proc p = spawn(cases[i]);
-		CHECK(finish(&p) == 1, "case %zu did not exit 1", i);
-	}
 	char name[96];
 	unique_name(name, sizeof name, "absent");
 	const char *missing[] = {"goipc-peer", "send", name, "a", "1", NULL};
-	struct proc p = spawn(missing);
-	CHECK(finish(&p) == 1, "send to a missing queue did not exit 1");
+	const char *const *cases[] = {no_role, unknown, short_args, bad_number, missing};
+	for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+		struct proc p = spawn_fd(cases[i], STDERR_FILENO);
+		char reason[256];
+		read_output(&p, reason, sizeof reason, false);
+		CHECK(strncmp(reason, "goipc-peer: ", 12) == 0, "case %zu printed %s", i, reason);
+		CHECK(finish(&p) == 1, "case %zu did not exit 1", i);
+	}
 }
 
 TEST(shared_library_exports_only_the_api, 0)
