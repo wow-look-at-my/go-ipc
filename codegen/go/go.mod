@@ -8,3 +8,10 @@ require (
 )
 
 require go.yaml.in/yaml/v3 v3.0.5 // indirect
+
+// ipcgen generates demo/demo.go from the same tree, so it resolves locally.
+require github.com/wow-look-at-my/go-ipc/ipcgen v0.0.0
+
+replace github.com/wow-look-at-my/go-ipc/ipcgen => ../../ipcgen
+
+tool github.com/wow-look-at-my/go-ipc/ipcgen
