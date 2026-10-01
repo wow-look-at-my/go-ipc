@@ -45,6 +45,10 @@ const char *goipc_strerror(int err)
 	case GOIPC_EINVAL: return "goipc: invalid argument";
 	case GOIPC_EBUFFER: return "goipc: receive buffer is smaller than the next message";
 	case GOIPC_EOF: return "goipc: end of stream";
+	case GOIPC_EPEERGONE: return "goipc: peer is gone";
+	case GOIPC_EINUSE: return "goipc: name is in use";
+	case GOIPC_ENOTCONSUMER: return "goipc: handle is not the receiving end";
+	case GOIPC_ETOOMANYCLAIMS: return "goipc: too many claims in progress";
 	default: return "goipc: unknown error";
 	}
 }
