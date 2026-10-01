@@ -6,8 +6,10 @@
 // no thread and honors a [context.Context]. [Queue], [Channel] and [Conn]
 // combine both into named endpoints with blocking sends and receives.
 //
-// Send and Recv spin before they park, so an active endpoint moves messages
-// with no system call. See README.md for usage and docs/design.md for layout.
+// An active endpoint moves messages with no system call. A side that cannot
+// proceed parks on a kernel wait and never spins. See README.md for usage,
+// docs/design.md for layout, and spec/README.md for the wire contract that
+// the C, C++ and Python implementations share.
 package ipc
 
 import (
