@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import faulthandler
 import itertools
 import json
 import os
@@ -20,6 +21,9 @@ PYTHON_DIR = os.path.dirname(HERE)
 BOUND = 20.0
 
 _counter = itertools.count()
+
+# A hung suite prints every thread's stack and exits rather than block CI.
+faulthandler.dump_traceback_later(float(os.environ.get("GOIPC_TEST_HANG_SECONDS", "600")), exit=True)
 
 
 def spec_dir() -> str:

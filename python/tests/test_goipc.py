@@ -317,6 +317,24 @@ class QueueTest(Named):
 			goipc.Queue.open(support.unique_name("missing"))
 		self.assertEqual(cm.exception.errno, errno.ENOENT)
 
+	def test_argument_edges(self) -> None:
+		q = goipc.Queue.create(support.unique_name("qd"), 0)
+		self.addCleanup(q.close)
+		self.addCleanup(q.unlink)
+		self.assertEqual(q.capacity, goipc.DEFAULT_CAPACITY)
+		with self.assertRaises(goipc.Timeout):
+			q.recv(timeout=0)
+		with self.assertRaises(goipc.InvalidArgument):
+			q.read_batch(0, lambda t, p: None, timeout=0)
+
+	def test_commit_after_close(self) -> None:
+		q = goipc.Queue.create(support.unique_name("qcc"), CAP)
+		self.addCleanup(q.unlink)
+		claim = q.claim(1, 4)
+		q.close()
+		with self.assertRaises(goipc.Closed):
+			claim.commit()
+
 	def test_recv_into(self) -> None:
 		q = self.queue("qi")
 		q.send(b"z" * 300, type=4)
@@ -336,11 +354,12 @@ class QueueTest(Named):
 	def test_full_queue_blocks_the_sender(self) -> None:
 		q = self.queue("qf")
 		n = self.fill(q)
+		late = b"L" * 100
 		with self.assertRaises(goipc.Full):
-			q.try_send(b"late")
+			q.try_send(late)
 		with self.assertRaises(goipc.Timeout):
-			q.send(b"late", timeout=0.01)
-		sender = support.start(lambda: q.send(b"late", type=1000, timeout=support.BOUND), "sender")
+			q.send(late, timeout=0.01)
+		sender = support.start(lambda: q.send(late, type=1000, timeout=support.BOUND), "sender")
 		got = [q.recv(timeout=support.BOUND) for _ in range(n + 1)]
 		sender.finish(self)
 		self.assertEqual([t for t, _ in got], list(range(n)) + [1000])
@@ -630,12 +649,14 @@ class ProcessTest(Named):
 			while True:
 				n = conn.readinto(buf)
 				if n == 0:
+					conn.close()
 					return
 				conn.write(memoryview(buf)[:n])
 
 		echoer = support.start(echo, "echo")
-		support.Peer("dial-check", name, 50000).finish(self)
+		peer = support.Peer("dial-check", name, 50000)
 		echoer.finish(self)
+		peer.finish(self)
 
 	def test_this_process_dials_echo_peer(self) -> None:
 		name = support.unique_name("pc3")
