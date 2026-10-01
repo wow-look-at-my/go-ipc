@@ -151,7 +151,7 @@ The schema language is in `spec/schema.md`.
 
 ## Build and test
 
-`make test` builds and tests every implementation in parallel, then runs the cross-language suite. `make -C python interpreters` installs the Python versions that the Python suite runs on.
+`spec/` is a git submodule, so run `git submodule update --init` after a clone. `make test` builds and tests every implementation in parallel, then runs the cross-language suite. `make -C python interpreters` installs the Python versions that the Python suite runs on.
 
 ## Platforms
 
