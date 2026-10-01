@@ -185,6 +185,11 @@ func TestConnCloseWriteWaitsForRoom(t *testing.T) {
 		err = client.Channel().TrySend(filler)
 	}
 	require.ErrorIs(t, err, ErrFull)
+	// An empty message is the smallest record, so after these the ring has
+	// no room for the end-of-stream message either.
+	for err = client.Channel().TrySend(nil); err == nil; err = client.Channel().TrySend(nil) {
+	}
+	require.ErrorIs(t, err, ErrFull)
 	require.NoError(t, client.SetWriteDeadline(time.Now().Add(50*time.Millisecond)))
 	require.ErrorIs(t, client.CloseWrite(), os.ErrDeadlineExceeded)
 
