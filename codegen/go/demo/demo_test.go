@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/wow-look-at-my/go-containers/set"
 )
 
 // vectorDir is spec/vectors/schema, seen from this package.
@@ -168,10 +169,10 @@ func TestInvalid(t *testing.T) {
 func TestTypeIDs(t *testing.T) {
 	assert.Equal(t, uint32(1), messages["Scalars"].id)
 	assert.Equal(t, uint32(0xFFFFFFFE), messages["Tagged"].id)
-	ids := map[uint32]bool{}
+	ids := set.New[uint32]()
 	for _, m := range messages {
-		assert.False(t, ids[m.id], "type ID %d is used twice", m.id)
-		ids[m.id] = true
+		assert.False(t, ids.Contains(m.id), "type ID %d is used twice", m.id)
+		ids.Add(m.id)
 	}
 }
 

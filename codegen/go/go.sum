@@ -1,0 +1,4 @@
+github.com/stretchr/testify v1.12.1 git:959dbdacf1533e155162811ea90c90117a420463
+github.com/stretchr/testify v1.12.1/go.mod git:959dbdacf1533e155162811ea90c90117a420463
+go.yaml.in/yaml/v3 v3.0.5 h1:N6y/pJk8buWs9NY5ERU2HSMfm+IuD/OtfdAnq6kESPw=
+go.yaml.in/yaml/v3 v3.0.5/go.mod h1:HVTZu1O7/Vkt2N+BFy8Zza+lnLsABggaTM2ZpNIGuKg=
