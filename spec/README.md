@@ -131,7 +131,8 @@ A conn is a byte stream over a channel. `Listen` creates the channel. `Dial` ope
 
 - A write splits its input into messages of at most the maximum message size, with type `0`.
 - A read returns bytes from the current message, then receives the next one. A message of type `1` is end-of-stream. Every read after it reports end-of-stream.
-- Close sends one type `1` message with an empty payload, best effort and non-blocking, then closes the channel.
+- CloseWrite sends one type `1` message with an empty payload through a blocking send. Later writes fail as closed. Reads go on.
+- Close sends that message best effort and non-blocking, unless CloseWrite already sent it. It then closes the channel.
 
 ## Conformance
 
