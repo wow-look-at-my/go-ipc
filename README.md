@@ -43,7 +43,16 @@ defer q.Close()
 err = q.Send(ctx, []byte("work item"))
 ```
 
-`TrySend` and `TryRecv` are the non-blocking forms. `ReadBatch` drains a burst in a single call.
+`TrySend` and `TryRecv` are the non-blocking forms. `ReadBatch` drains a burst in a single call. Only the handle `CreateQueue` returns can receive.
+
+## When a process dies
+
+- A sender that dies in the middle of a message does not wedge the queue. The receiver skips its unfinished message.
+- A sender whose receiver exits or closes gets `ErrPeerGone`. So does `OpenQueue` on a queue whose receiver is gone.
+- On a `Channel` or `Conn`, the other side gets every message the dead peer sent, then `ErrPeerGone`.
+- `CreateQueue` returns `ErrInUse` while a live process holds the name. It replaces an instance whose creator died, and the first create in a process sweeps what crashed processes left behind.
+
+Death is detected through a socket the kernel closes when the process exits, never by a poll or a timeout. See [docs/design.md](docs/design.md).
 
 ## Streams
 
@@ -94,22 +103,22 @@ Nothing spins, by design. A spin in user space burns a whole timeslice whenever 
 
 The test suite holds this package to that claim. `TestBlockedEndpointsConsumeNoCPU` measures the processor time of a process whose endpoints are all parked. `TestParkedWaitersHoldNoThreads` counts the OS threads that parked waiters occupy.
 
-`latency_test.go` carries the baselines to read a round trip against, because a parked round trip cannot beat the kernel underneath it. From one run on the development machine:
+`latency_test.go` carries the baselines to read a round trip against, because a parked round trip cannot beat the kernel underneath it. From one `go-toolchain` benchmark run in a 4-CPU Linux container:
 
 ```
-RingClaimCommit/256      54 ns/op   0 allocs/op   # no system call at all
-QueueThroughput/256     868 ns/op   1 allocs/op   # batched, parks when drained
-GoChannelPingPong       476 ns/op   0 allocs/op   # goroutine handoff floor
-PipePingPong           3177 ns/op   0 allocs/op   # kernel round-trip floor
-EventPingPong          4306 ns/op   4 allocs/op   # the wake primitive alone
-QueuePingPong          4715 ns/op   4 allocs/op   # parks on every message
+RingClaimCommit/256      58 ns/op   0 allocs/op   # no system call at all
+QueueThroughput/256     817 ns/op   1 allocs/op   # batched, parks when drained
+GoChannelPingPong       525 ns/op   0 allocs/op   # goroutine handoff floor
+PipePingPong           2802 ns/op   0 allocs/op   # kernel round-trip floor
+EventPingPong          3911 ns/op   4 allocs/op   # the wake primitive alone
+QueuePingPong          4748 ns/op   4 allocs/op   # parks on every message
 ```
 
 The ring is the fast path and costs no system call. Everything above a microsecond is the wakeup, and a wakeup happens whenever a side finds nothing to do. A consumer that outruns its producer therefore parks on almost every message, and pays for it. `ReadBatch` is the answer when a burst exists, because it amortizes one wakeup over the whole batch.
 
 ## Platforms
 
-Linux, macOS and Windows. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows.
+Linux, macOS and Windows, and CI runs the full suite on all three. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows. Exit detection uses a Unix socket per process, on all three. Windows has no sweep, so those sockets stay in the temporary directory after their processes exit.
 
 ## Documentation
 
