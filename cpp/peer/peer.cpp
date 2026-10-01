@@ -2,8 +2,11 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <span>
 #include <stdexcept>
@@ -14,7 +17,20 @@
 
 #include <goipc/goipc.hpp>
 
+#include "demo.hpp"
+
 namespace {
+
+// fixture.h builds each values.json entry as fx_value_<i>(), and uses bytes_of for bytes fields.
+std::vector<std::byte> bytes_of(const char *p, std::size_t n)
+{
+	std::vector<std::byte> out(n);
+	for (std::size_t i = 0; i < n; i++)
+		out[i] = static_cast<std::byte>(p[i]);
+	return out;
+}
+
+#include "fixture.h"
 
 constexpr std::chrono::seconds role_timeout{60};
 
@@ -143,6 +159,101 @@ void role_dial_check(std::string_view name, std::uint64_t total, const goipc::de
 	c.close();
 }
 
+template <class T>
+void send_value(goipc::Queue &q, int idx, const T &v, const goipc::detail::deadline &d)
+{
+	std::vector<std::byte> buf(v.size());
+	if (v.encode(buf) != buf.size())
+		throw std::runtime_error("entry " + std::to_string(idx) + ": encode does not write " +
+					 std::to_string(buf.size()) + " bytes");
+	q.send(T::type_id, buf, d.left());
+}
+
+void role_typed_send(std::string_view name, const goipc::detail::deadline &d)
+{
+	auto q = goipc::Queue::open(name);
+#define FX_CASE(idx, T) send_value<T>(q, idx, fx_value_##idx(), d);
+	FX_CASES
+#undef FX_CASE
+	q.close();
+}
+
+template <class T>
+std::vector<std::byte> reencode_as(std::span<const std::byte> in)
+{
+	std::optional<T> m = T::decode(in);
+	if (!m)
+		throw std::runtime_error("decode rejects the record");
+	std::vector<std::byte> out(m->size());
+	if (m->encode(out) != out.size())
+		throw std::runtime_error("encode does not write " + std::to_string(out.size()) + " bytes");
+	return out;
+}
+
+// reencode decodes in with the decoder for type, then encodes the result.
+std::vector<std::byte> reencode(std::uint32_t type, std::span<const std::byte> in)
+{
+#define FX_CASE(idx, T) \
+	if (type == T::type_id) \
+		return reencode_as<T>(in);
+	FX_CASES
+#undef FX_CASE
+	throw std::runtime_error("no message has type ID " + std::to_string(type));
+}
+
+std::vector<std::byte> read_file(const std::string &path)
+{
+	std::ifstream f(path, std::ios::binary);
+	std::vector<char> raw((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+	if (!f.is_open() || f.bad())
+		throw std::runtime_error("cannot read " + path);
+	return bytes_of(raw.data(), raw.size());
+}
+
+void recv_entry(goipc::Queue &q, std::span<std::byte> buf, const std::string &spec, int idx, std::uint32_t want_type,
+		const goipc::detail::deadline &d)
+{
+	std::string where = "entry " + std::to_string(idx) + ": ";
+	goipc::received r = q.recv(buf, d.left());
+	if (r.type != want_type)
+		throw std::runtime_error(where + "type " + std::to_string(r.type) + ", want " + std::to_string(want_type));
+	std::string path = spec + "/vectors/schema/" + std::to_string(idx) + ".bin";
+	std::vector<std::byte> got;
+	try {
+		got = reencode(r.type, buf.first(r.size));
+	} catch (const std::exception &e) {
+		throw std::runtime_error(where + e.what());
+	}
+	if (got != read_file(path))
+		throw std::runtime_error(where + "re-encoding differs from " + path);
+}
+
+void role_typed_recv(std::string_view name, std::uint64_t capacity, const goipc::detail::deadline &d)
+{
+	const char *spec = std::getenv("GOIPC_SPEC_DIR");
+	if (spec == nullptr || *spec == '\0')
+		throw std::runtime_error("GOIPC_SPEC_DIR is not set; it must name the spec directory");
+	auto q = goipc::Queue::create(name, capacity);
+	try {
+		ready();
+		std::vector<std::byte> buf(q.max_message_size());
+		int count = 0;
+#define FX_CASE(idx, T) \
+	recv_entry(q, buf, spec, idx, T::type_id, d); \
+	count++;
+		FX_CASES
+#undef FX_CASE
+		std::printf("ok %d\n", count);
+		std::fflush(stdout);
+	} catch (...) {
+		q.close();
+		q.unlink();
+		throw;
+	}
+	q.close();
+	q.unlink();
+}
+
 void run(int argc, char **argv)
 {
 	if (argc < 2)
@@ -165,6 +276,12 @@ void run(int argc, char **argv)
 	} else if (role == "dial-check") {
 		need(2, "dial-check <name> <bytes>");
 		role_dial_check(argv[2], parse_u64("bytes", argv[3]), d);
+	} else if (role == "typed-send") {
+		need(1, "typed-send <name>");
+		role_typed_send(argv[2], d);
+	} else if (role == "typed-recv") {
+		need(2, "typed-recv <name> <capacity>");
+		role_typed_recv(argv[2], parse_u64("capacity", argv[3]), d);
 	} else {
 		throw std::runtime_error("unknown role \"" + std::string(role) + "\"");
 	}

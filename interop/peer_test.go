@@ -70,6 +70,20 @@ func runPeer(args []string) error {
 			return fmt.Errorf("bytes: %w", err)
 		}
 		return peerDialCheck(rest[0], n)
+	case "typed-send":
+		if len(rest) != 1 {
+			return errors.New("usage: typed-send <name>")
+		}
+		return peerTypedSend(ctx, rest[0])
+	case "typed-recv":
+		if len(rest) != 2 {
+			return errors.New("usage: typed-recv <name> <capacity>")
+		}
+		capacity, err := strconv.Atoi(rest[1])
+		if err != nil {
+			return fmt.Errorf("capacity: %w", err)
+		}
+		return peerTypedRecv(ctx, rest[0], capacity)
 	default:
 		return fmt.Errorf("unknown role %q", role)
 	}
