@@ -143,6 +143,30 @@ TEST(ring_full_reports_efull_and_frees_on_read, 0)
 	free(buf);
 }
 
+/* A preempted producer can store a head value that is more than a lap old.
+ * The claim must still see a full ring as full. */
+TEST(ring_stale_head_cache_does_not_overrun, 0)
+{
+	void *buf;
+	goipc_ring r = new_ring(4096, &buf);
+	struct goipc_ring_hdr *h = goipc__hdr(&r);
+	static uint8_t p[1016];
+	struct seen s = {.n = 0};
+	for (int lap = 0; lap < 2; lap++) {
+		REQUIRE(goipc_ring_read(&r, 10, record, &s) >= 0);
+		while (goipc_ring_try_write(&r, 1, p, sizeof p) == GOIPC_OK)
+			;
+	}
+	uint64_t head = atomic_load(&h->head);
+	REQUIRE(atomic_load(&h->tail) - head == 4096);
+	atomic_store(&h->head_cache, head - 4096);
+	REQUIRE_RC(goipc_ring_try_write(&r, 1, p, 0), GOIPC_EFULL);
+	REQUIRE(atomic_load(&h->tail) - head == 4096);
+	REQUIRE(goipc_ring_read(&r, 1, record, &s) == 1);
+	REQUIRE_RC(goipc_ring_try_write(&r, 1, p, sizeof p), GOIPC_OK);
+	free(buf);
+}
+
 TEST(ring_abort_becomes_padding, 0)
 {
 	void *buf;

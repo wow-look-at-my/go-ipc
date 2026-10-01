@@ -140,9 +140,17 @@ int goipc_ring_try_claim(goipc_ring *r, uint32_t type, size_t len, goipc_claim *
 		if (to_end < aligned)
 			need = aligned + to_end;
 
-		if (capacity - (tail - head) < need) {
+		/* A slow producer can store an old head into head_cache, so
+		 * tail - head_cache can exceed capacity. The unsigned subtraction
+		 * would then wrap and report room that does not exist. */
+		uint64_t used = tail - head;
+		if (used > capacity || capacity - used < need) {
 			head = atomic_load(&h->head);
-			if (capacity - (tail - head) < need)
+			used = tail - head;
+			/* head passed this tail value, so the tail is stale. */
+			if ((int64_t)used < 0)
+				continue;
+			if (used > capacity || capacity - used < need)
 				return GOIPC_EFULL;
 			atomic_store(&h->head_cache, head);
 		}
