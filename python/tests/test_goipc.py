@@ -405,7 +405,9 @@ class QueueTest(Named):
 		sender = support.start(lambda: q.send(b"x" * 100, timeout=support.BOUND), "sender")
 		sender.started_fn.wait(support.BOUND)
 		q.close()
-		self.assertIsInstance(sender.finish_error(self), goipc.Closed)
+		# Close clears the consumer before it closes the events, so the sender
+		# can wake to find the receiver gone.
+		self.assertIsInstance(sender.finish_error(self), (goipc.Closed, goipc.PeerGone))
 
 	def test_read_batch(self) -> None:
 		q = self.queue("qr")
@@ -556,8 +558,12 @@ class PeerTest(Named):
 		q = self.queue("iu")
 		with self.assertRaises(goipc.InUse):
 			goipc.Queue.create(q.name, CAP)
+		name = support.unique_name("iuc")
+		c = goipc.Channel.create(name, CAP)
+		self.addCleanup(c.close)
+		self.addCleanup(c.unlink)
 		with self.assertRaises(goipc.InUse):
-			goipc.Channel.create(q.name, CAP)
+			goipc.Channel.create(name, CAP)
 
 	def test_recv_on_an_opened_handle_is_not_consumer(self) -> None:
 		q = self.queue("nc")
