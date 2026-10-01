@@ -30,7 +30,7 @@ jobs:
       GOIPC_PEER_CPP: ${{ github.workspace }}/cpp/build/goipc-peer
       GOIPC_PEER_PY: python3 -m goipc.peer
       PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}/build/gen/py
-      GOIPC_INTEROP_LANGS: ${{ runner.os == 'Linux' && 'go,c,cpp,py' || 'go' }}
+      GOIPC_INTEROP_LANGS: ${{ matrix.os == 'ubuntu-latest' && 'go,c,cpp,py' || 'go' }}
     steps:
       - uses: actions/checkout@v4
         with:
