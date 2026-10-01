@@ -75,7 +75,7 @@ TEST(Peer, RecvAndSenders)
 		EXPECT_EQ(finish(s), 0);
 	EXPECT_EQ(read_line(recv.out), "ok 6000");
 	EXPECT_EQ(finish(recv), 0);
-	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name));
+	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-ipc-" + name + ".name"));
 }
 
 TEST(Peer, ListenEchoAndDialCheck)
@@ -87,7 +87,7 @@ TEST(Peer, ListenEchoAndDialCheck)
 	auto dial = spawn_peer({"dial-check", name, "300000"});
 	EXPECT_EQ(finish(dial), 0);
 	EXPECT_EQ(finish(listen), 0);
-	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name + ".c2o"));
+	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-ipc-" + name + ".c2o.name"));
 }
 
 TEST(Peer, TypedSendAndRecv)
@@ -101,7 +101,7 @@ TEST(Peer, TypedSendAndRecv)
 	std::string done = read_line(recv.out);
 	EXPECT_TRUE(done.starts_with("ok ") && std::stoi(done.substr(3)) > 0) << done;
 	EXPECT_EQ(finish(recv), 0);
-	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name));
+	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-ipc-" + name + ".name"));
 }
 
 // typed-recv must reject a record whose type is not the next entry's type ID.
@@ -114,7 +114,7 @@ TEST(Peer, TypedRecvRejectsAWrongType)
 	auto send = spawn_peer({"send", name, "a", "1"});
 	EXPECT_EQ(finish(send), 0);
 	EXPECT_EQ(finish(recv), 1);
-	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name));
+	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-ipc-" + name + ".name"));
 }
 
 TEST(Peer, BadArgumentsFail)

@@ -24,15 +24,17 @@ TEST(Blocking, ParkedEndpointsConsumeNoCPU)
 	auto idle_name = testutil::unique_name("idle");
 	auto full_name = testutil::unique_name("full");
 	testutil::queue_files f1{idle_name}, f2{full_name};
-	auto idle = Queue::create(idle_name, 4096);
 	auto full = Queue::create(full_name, 4096);
 	std::vector<std::byte> payload(504);
 	while (full.try_send(0, payload)) {
 	}
 
+	testutil::pipe_pair ready;
 	pid_t pid = testutil::fork_child([&] {
-		auto rx = Queue::open(idle_name);
+		// Only the creating handle receives, so the child owns the idle queue.
+		auto rx = Queue::create(idle_name, 4096);
 		auto tx = Queue::open(full_name);
+		ready.signal();
 		std::vector<std::thread> threads;
 		std::atomic<int> timed_out{0};
 		threads.emplace_back([&] {
@@ -58,6 +60,8 @@ TEST(Blocking, ParkedEndpointsConsumeNoCPU)
 		return timed_out == senders + 1 ? 0 : 1;
 	});
 
+	ASSERT_TRUE(ready.wait());
+	auto idle = Queue::open(idle_name);
 	ASSERT_TRUE(testutil::eventually([&] {
 		return idle.ring().recv_waiters() == 1 && full.ring().send_waiters() == senders;
 	}));

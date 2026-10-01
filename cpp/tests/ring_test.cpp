@@ -15,6 +15,8 @@ using goipc::Ring;
 using testutil::bytes_of;
 using testutil::errc_of;
 
+constexpr std::size_t ring4k = goipc::wire::header_size + 4096;
+
 std::int32_t len_at(testutil::aligned_buffer &b, std::size_t index)
 {
 	std::int32_t v;
@@ -31,36 +33,82 @@ std::uint32_t type_at(testutil::aligned_buffer &b, std::size_t index)
 
 TEST(Ring, InitErrors)
 {
-	testutil::aligned_buffer small(4607);
+	testutil::aligned_buffer small(ring4k - 1);
 	EXPECT_EQ(errc_of([&] { Ring::init(small.span()); }), errc::too_small);
 
-	testutil::aligned_buffer big(4700);
+	testutil::aligned_buffer big(ring4k + 100);
 	EXPECT_EQ(errc_of([&] { Ring::init(big.span().subspan(1)); }), errc::unaligned);
 }
 
 TEST(Ring, InitPicksLargestPowerOfTwo)
 {
-	testutil::aligned_buffer b(9000);
+	testutil::aligned_buffer b(goipc::wire::header_size + 9000);
 	auto r = Ring::init(b.span());
 	EXPECT_EQ(r.capacity(), 8192u);
-	EXPECT_EQ(Ring::size_for(8192), 8704u);
+	EXPECT_EQ(Ring::size_for(8192), 16896u + 8192u);
 	EXPECT_TRUE(r.empty());
 	EXPECT_EQ(r.buffered(), 0u);
 }
 
+TEST(Ring, V2Layout)
+{
+	namespace wire = goipc::wire;
+	EXPECT_EQ(wire::ring_version, 2u);
+	EXPECT_EQ(wire::offset::consumer, 24u);
+	EXPECT_EQ(wire::offset::slots, 512u);
+	EXPECT_EQ(wire::claim_slots, 256u);
+	EXPECT_EQ(wire::slot_size, 64u);
+	EXPECT_EQ(wire::header_size, 512u + 256u * 64u);
+	EXPECT_EQ(wire::offset::slot_owner, 0u);
+	EXPECT_EQ(wire::offset::slot_at, 8u);
+	EXPECT_EQ(wire::offset::slot_claim_size, 16u);
+	EXPECT_EQ(wire::no_intent, UINT64_MAX);
+
+	testutil::aligned_buffer b(ring4k);
+	std::memset(b.data(), 0xAB, b.size());
+	auto r = Ring::init(b.span(), 0x1234567890ABCDEFull);
+	auto u64_at = [&](std::size_t off) {
+		std::uint64_t v;
+		std::memcpy(&v, b.data() + off, 8);
+		return v;
+	};
+	EXPECT_EQ(u64_at(24), 0x1234567890ABCDEFull);
+	EXPECT_EQ(r.consumer(), 0x1234567890ABCDEFull);
+	for (std::size_t i = 0; i < 256; i++) {
+		std::size_t base = 512 + i * 64;
+		ASSERT_EQ(u64_at(base), 0u) << "slot " << i << " owner";
+		ASSERT_EQ(u64_at(base + 8), UINT64_MAX) << "slot " << i << " at";
+		for (std::size_t j = 16; j < 64; j++)
+			ASSERT_EQ(b.data()[base + j], std::byte{0}) << "slot " << i << " byte " << j;
+	}
+	EXPECT_EQ(Ring::init(b.span()).consumer(), 0u);
+}
+
+// A raw ring claim names no producer, so it leaves every slot untouched.
+TEST(Ring, RawClaimTouchesNoSlot)
+{
+	testutil::aligned_buffer b(ring4k);
+	auto r = Ring::init(b.span());
+	std::vector<std::byte> before(b.data() + 512, b.data() + goipc::wire::header_size);
+	auto c = r.try_claim(1, 8);
+	ASSERT_TRUE(c.has_value());
+	EXPECT_EQ(0, std::memcmp(before.data(), b.data() + 512, before.size()));
+	c->commit();
+}
+
 TEST(Ring, AttachErrors)
 {
-	testutil::aligned_buffer zero(4608);
+	testutil::aligned_buffer zero(ring4k);
 	EXPECT_EQ(errc_of([&] { Ring::attach(zero.span()); }), errc::bad_layout);
 
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	Ring::init(b.span());
 	auto poke32 = [&](std::size_t off, std::uint32_t v) { std::memcpy(b.data() + off, &v, 4); };
 	auto poke64 = [&](std::size_t off, std::uint64_t v) { std::memcpy(b.data() + off, &v, 8); };
 
-	poke32(goipc::wire::offset::version, 2);
-	EXPECT_EQ(errc_of([&] { Ring::attach(b.span()); }), errc::bad_layout);
 	poke32(goipc::wire::offset::version, 1);
+	EXPECT_EQ(errc_of([&] { Ring::attach(b.span()); }), errc::bad_layout);
+	poke32(goipc::wire::offset::version, 2);
 
 	poke64(goipc::wire::offset::capacity, 6000);
 	EXPECT_EQ(errc_of([&] { Ring::attach(b.span()); }), errc::bad_layout);
@@ -76,7 +124,7 @@ TEST(Ring, AttachErrors)
 
 TEST(Ring, MaxMessageSize)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	EXPECT_EQ(r.max_message_size(), 2040u);
 	std::vector<std::byte> p(2040, std::byte{7});
@@ -89,7 +137,7 @@ TEST(Ring, MaxMessageSize)
 
 TEST(Ring, WrapInsertsPadding)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	ASSERT_TRUE(r.try_write(10, std::vector<std::byte>(2000)));
 	ASSERT_EQ(r.read(1, [](std::uint32_t, std::span<const std::byte>) {}), 1u);
@@ -114,7 +162,7 @@ TEST(Ring, WrapInsertsPadding)
 
 TEST(Ring, ClaimDestructorAborts)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	{
 		auto c = r.try_claim(5, 16);
@@ -130,7 +178,7 @@ TEST(Ring, ClaimDestructorAborts)
 
 TEST(Ring, ClaimMoveAndCommit)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	auto c = std::move(*r.try_claim(5, 3));
 	goipc::Claim moved = std::move(c);
@@ -149,7 +197,7 @@ TEST(Ring, ClaimMoveAndCommit)
 
 TEST(Ring, ClaimOnFullRing)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	ASSERT_TRUE(r.try_write(1, std::vector<std::byte>(2040)));
 	ASSERT_TRUE(r.try_write(1, std::vector<std::byte>(2040)));
@@ -159,7 +207,7 @@ TEST(Ring, ClaimOnFullRing)
 
 TEST(Ring, RecvIntoSmallBufferLeavesRecordQueued)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	ASSERT_TRUE(r.try_write(9, bytes_of("hello world")));
 
@@ -183,7 +231,7 @@ TEST(Ring, RecvIntoSmallBufferLeavesRecordQueued)
 
 TEST(Ring, CorruptLength)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	ASSERT_TRUE(r.try_write(1, bytes_of("abcd")));
 	auto set_len = [&](std::int32_t v) { std::memcpy(b.data() + goipc::wire::header_size, &v, 4); };
@@ -198,7 +246,7 @@ TEST(Ring, CorruptLength)
 
 TEST(Ring, ThrowingCallbackLeavesRecordQueued)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	ASSERT_TRUE(r.try_write(1, bytes_of("a")));
 	ASSERT_TRUE(r.try_write(2, bytes_of("b")));
@@ -219,7 +267,7 @@ TEST(Ring, ThrowingCallbackLeavesRecordQueued)
 
 TEST(Ring, ReadLimitAndEmptyPayload)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	for (std::uint32_t i = 0; i < 5; i++)
 		ASSERT_TRUE(r.try_write(i, {}));
@@ -238,7 +286,7 @@ TEST(Ring, ReadLimitAndEmptyPayload)
 // A claim moves tail before it stores its header.
 TEST(Ring, UnpublishedClaimOverOldPayloadReadsNothing)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	auto drain = [&] { return r.read(SIZE_MAX, [](std::uint32_t, std::span<const std::byte>) {}); };
 	ASSERT_TRUE(r.try_write(1, std::vector<std::byte>(2032, std::byte{0x11})));
@@ -265,7 +313,7 @@ TEST(Ring, UnpublishedClaimOverOldPayloadReadsNothing)
 // A producer can store a head_cache value that is a lap old, or one that is ahead of another producer's tail.
 TEST(Ring, StaleHeadCacheDoesNotOverrunReader)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	auto drain = [&] { return r.read(SIZE_MAX, [](std::uint32_t, std::span<const std::byte>) {}); };
 	for (int i = 0; i < 4; i++) {
@@ -289,7 +337,7 @@ TEST(Ring, StaleHeadCacheDoesNotOverrunReader)
 
 TEST(Ring, ManyLaps)
 {
-	testutil::aligned_buffer b(4608);
+	testutil::aligned_buffer b(ring4k);
 	auto r = Ring::init(b.span());
 	std::vector<std::byte> buf(2040);
 	for (std::uint32_t i = 0; i < 5000; i++) {

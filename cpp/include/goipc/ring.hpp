@@ -222,6 +222,8 @@ public:
 	std::int32_t recv_waiters() const noexcept { return i32(wire::offset::recv_waiters).load(); }
 	std::int32_t send_waiters() const noexcept { return i32(wire::offset::send_waiters).load(); }
 	std::uint64_t consumer() const noexcept { return u64(base_, wire::offset::consumer).load(); }
+	// data is the start of the data region.
+	std::byte *data() const noexcept { return data_; }
 
 	std::atomic_ref<std::uint64_t> slot_owner(int slot) const noexcept
 	{

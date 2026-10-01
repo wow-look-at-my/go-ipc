@@ -64,7 +64,7 @@ TEST(Channel, BothDirections)
 
 	creator.unlink();
 	for (const char *dir : {".c2o", ".o2c"})
-		EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name + dir)) << dir;
+		EXPECT_FALSE(testutil::file_exists("/dev/shm/go-ipc-" + name + dir + ".name")) << dir;
 }
 
 TEST(Channel, OpenMissingFails)

@@ -54,6 +54,7 @@ TEST(Wire, FieldOffsetsMatchSpec)
 		{"version", {wire::offset::version, 4}},
 		{"flags", {wire::offset::flags, 4}},
 		{"capacity", {wire::offset::capacity, 8}},
+		{"consumer", {wire::offset::consumer, 8}},
 		{"tail", {wire::offset::tail, 8}},
 		{"head", {wire::offset::head, 8}},
 		{"head_cache", {wire::offset::head_cache, 8}},
@@ -72,7 +73,7 @@ TEST(Wire, FieldOffsetsMatchSpec)
 // The control block an init writes must hold each field at its spec offset.
 TEST(Wire, InitWritesHeaderAtSpecOffsets)
 {
-	testutil::aligned_buffer buf(9000);
+	testutil::aligned_buffer buf(wire::header_size + 9000);
 	std::memset(buf.data(), 0xAB, buf.size());
 	auto ring = goipc::Ring::init(buf.span());
 	ASSERT_TRUE(ring.try_write(3, testutil::bytes_of("xyz")));
@@ -97,9 +98,11 @@ TEST(Wire, InitWritesHeaderAtSpecOffsets)
 	EXPECT_EQ(field("head_cache"), 0u);
 	EXPECT_EQ(field("recv_waiters"), 0u);
 	EXPECT_EQ(field("send_waiters"), 0u);
+	EXPECT_EQ(field("consumer"), 0u);
 
-	// Every other byte of the control block is zero.
-	for (std::size_t i = 0; i < spec::header_size; i++) {
+	// Every other byte of the cache lines is zero. The claim slots after them
+	// are covered by Ring.V2Layout.
+	for (std::size_t i = 0; i < wire::control_size; i++) {
 		bool in_field = false;
 		for (const auto &f : spec::ring_fields)
 			in_field = in_field || (i >= f.offset && i < f.offset + f.size);
@@ -128,6 +131,10 @@ TEST(Wire, ErrorNumbersMatchCHeader)
 	static_assert(static_cast<int>(errc::invalid) == GOIPC_EINVAL);
 	static_assert(static_cast<int>(errc::buffer) == GOIPC_EBUFFER);
 	static_assert(static_cast<int>(errc::eof) == GOIPC_EOF);
+	static_assert(static_cast<int>(errc::peer_gone) == -18);
+	static_assert(static_cast<int>(errc::in_use) == -19);
+	static_assert(static_cast<int>(errc::not_consumer) == -20);
+	static_assert(static_cast<int>(errc::too_many_claims) == -21);
 	static_assert(wire::ring_magic == GOIPC_RING_MAGIC);
 	static_assert(wire::type_padding == GOIPC_TYPE_PADDING);
 	static_assert(wire::default_capacity == GOIPC_DEFAULT_CAPACITY);
