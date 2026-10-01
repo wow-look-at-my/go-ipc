@@ -104,6 +104,47 @@ TEST(peer_listen_echo_and_dial_check_roles, T_FORK)
 	CHECK(!path_exists(path), "listen-echo left %s behind", path);
 }
 
+TEST(peer_typed_send_and_recv_roles, T_FORK)
+{
+	REQUIRE(setenv("GOIPC_SPEC_DIR", GOIPC_SPEC_DIR, 1) == 0);
+	char name[96];
+	unique_name(name, sizeof name, "peert");
+	const char *recv_args[] = {"goipc-peer", "typed-recv", name, "4096", NULL};
+	struct proc r = spawn(recv_args);
+	char line[64];
+	read_output(&r, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+	const char *send_args[] = {"goipc-peer", "typed-send", name, NULL};
+	struct proc s = spawn(send_args);
+	CHECK(finish(&s) == 0, "typed-send failed");
+	read_output(&r, line, sizeof line, false);
+	CHECK(strncmp(line, "ok ", 3) == 0 && atoi(line + 3) > 0, "typed-recv printed %s", line);
+	REQUIRE(finish(&r) == 0, "typed-recv failed");
+	char path[160];
+	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	CHECK(!path_exists(path), "typed-recv left %s behind", path);
+}
+
+/* typed-recv must reject a record whose type is not the next entry's type ID. */
+TEST(peer_typed_recv_rejects_a_wrong_type, T_FORK)
+{
+	REQUIRE(setenv("GOIPC_SPEC_DIR", GOIPC_SPEC_DIR, 1) == 0);
+	char name[96];
+	unique_name(name, sizeof name, "peerw");
+	const char *recv_args[] = {"goipc-peer", "typed-recv", name, "4096", NULL};
+	struct proc r = spawn(recv_args);
+	char line[64];
+	read_output(&r, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+	const char *send_args[] = {"goipc-peer", "send", name, "a", "1", NULL};
+	struct proc s = spawn(send_args);
+	CHECK(finish(&s) == 0, "send failed");
+	CHECK(finish(&r) == 1, "typed-recv accepted a record of type 0");
+	char path[160];
+	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	CHECK(!path_exists(path), "typed-recv left %s behind", path);
+}
+
 TEST(peer_fails_on_bad_usage, T_FORK)
 {
 	const char *no_role[] = {"goipc-peer", NULL};
