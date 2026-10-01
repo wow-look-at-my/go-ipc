@@ -143,9 +143,9 @@ TEST(Conn, CloseWrite)
 	l.write(bytes_of("answer"), 1s);
 	EXPECT_EQ(text_of(read_n(d, 6)), "answer");
 
-	// Close after close_write sends no second end-of-stream.
+	// Close after close_write sends no second end-of-stream. The peer finds nothing more, and then finds this side gone.
 	d.close();
-	EXPECT_FALSE(l.channel().rx().try_recv().has_value());
+	EXPECT_EQ(errc_of([&] { l.channel().rx().try_recv(); }), errc::peer_gone);
 }
 
 TEST(Conn, CrossProcessEcho)

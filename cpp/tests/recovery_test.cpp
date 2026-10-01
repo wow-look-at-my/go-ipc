@@ -94,8 +94,10 @@ TEST(Recovery, DeadProducerClaimAcrossTheWrap)
 	auto name = testutil::unique_name("rec");
 	testutil::queue_files f{name};
 	auto q = Queue::create(name, 4096);
-	ASSERT_TRUE(q.try_send(1, std::vector<std::byte>(3000)));
-	ASSERT_EQ(q.recv(1s).type, 1u);
+	ASSERT_TRUE(q.try_send(1, std::vector<std::byte>(1500)));
+	ASSERT_TRUE(q.try_send(1, std::vector<std::byte>(1488)));
+	ASSERT_EQ(q.try_read_batch(2, [](std::uint32_t, std::span<const std::byte>) {}), 2u);
+	ASSERT_EQ(q.ring().head(), 3008u);
 	pid_t pid = testutil::fork_child([&] {
 		auto p = Queue::open(name);
 		auto c = p.claim(9, 1600, 10s);
