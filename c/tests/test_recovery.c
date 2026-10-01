@@ -404,6 +404,24 @@ TEST(sender_sees_closed_receiver, 0)
 	goipc_queue_destroy(q);
 }
 
+TEST(open_tells_not_found_from_not_ready, 0)
+{
+	char name[96];
+	unique_name(name, sizeof name, "nr");
+	goipc_queue *q;
+	REQUIRE_RC(goipc_queue_open(name, &q), GOIPC_ESYS);
+	CHECK(goipc_last_errno() == ENOENT, "errno %d", goipc_last_errno());
+	/* A name file with no instance id is a create in progress. */
+	char *path = goipc__name_path(name);
+	FILE *f = fopen(path, "w");
+	REQUIRE(f != NULL);
+	fclose(f);
+	REQUIRE_RC(goipc_queue_open(name, &q), GOIPC_ESYS);
+	CHECK(goipc_last_errno() == EAGAIN, "errno %d", goipc_last_errno());
+	unlink(path);
+	free(path);
+}
+
 TEST(open_handle_cannot_receive, 0)
 {
 	char name[96];

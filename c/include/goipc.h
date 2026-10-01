@@ -130,7 +130,8 @@ typedef struct goipc_queue goipc_queue;
  * name. Only this handle may receive. */
 int goipc_queue_create(const char *name, size_t capacity, goipc_queue **out);
 /* goipc_queue_open attaches as a sender. It returns GOIPC_EPEERGONE when the
- * receiver has exited or closed. */
+ * receiver has exited or closed. A missing name is GOIPC_ESYS with ENOENT. A
+ * name whose create has not finished is GOIPC_ESYS with EAGAIN. */
 int goipc_queue_open(const char *name, goipc_queue **out);
 const char *goipc_queue_name(const goipc_queue *q);
 size_t goipc_queue_capacity(const goipc_queue *q);

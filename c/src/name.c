@@ -244,8 +244,8 @@ int goipc__publish_inc(const char *name, const char *inc)
 	return rc;
 }
 
-/* A name file with no instance id yet is reported as ENOENT: the instance
- * does not exist. */
+/* A missing name file is not-found: GOIPC_ESYS with ENOENT. A name file with
+ * no valid instance id is not-ready: GOIPC_ESYS with EAGAIN. */
 int goipc__read_name(const char *name, char *inc)
 {
 	char *path = goipc__name_path(name);
@@ -260,7 +260,7 @@ int goipc__read_name(const char *name, char *inc)
 	if (rc != GOIPC_OK)
 		return rc;
 	if (inc[0] == '\0')
-		return goipc__sys_errno(ENOENT);
+		return goipc__sys_errno(EAGAIN);
 	return GOIPC_OK;
 }
 
