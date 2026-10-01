@@ -25,6 +25,9 @@ jobs:
   # Builds every implementation and runs the cross-language matrix.
   matrix:
     runs-on: ubuntu-latest
+    env:
+      # go-toolchain submits a dependency snapshot in CI and needs a token for it.
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - run: sudo curl -fL --compressed "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64" -o /usr/local/bin/go-toolchain
