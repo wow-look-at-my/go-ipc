@@ -1,7 +1,9 @@
 package ipc
 
 import (
+	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -222,6 +224,52 @@ func TestRingDetectsCorruptLength(t *testing.T) {
 	assert.ErrorIs(t, err, ErrCorrupt)
 }
 
+// TestRingStaleHeadCacheDoesNotOverrun sets the state that a producer leaves
+// when a scheduler stops it between its load of head and its store into
+// headCache: a cached head more than a lap old, on a full ring.
+func TestRingStaleHeadCacheDoesNotOverrun(t *testing.T) {
+	r := newTestRing(t, MinCapacity)
+	payload := make([]byte, r.MaxMessageSize())
+	for lap := 0; lap < 3; lap++ {
+		require.NoError(t, r.TryWrite(1, payload))
+		require.NoError(t, r.TryWrite(1, payload))
+		_, err := r.Read(2, func(uint32, []byte) {})
+		require.NoError(t, err)
+	}
+	require.NoError(t, r.TryWrite(2, payload))
+	require.NoError(t, r.TryWrite(2, payload))
+
+	r.hdr.headCache.Store(0)
+	_, err := r.TryClaim(3, 0)
+	require.ErrorIs(t, err, ErrFull, "a stale cached head must not open room in a full ring")
+
+	n, err := r.Read(10, func(typ uint32, _ []byte) { assert.Equal(t, uint32(2), typ) })
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+}
+
+// TestRingReadStopsAtUnpublishedClaim sets the state between a producer's
+// advance of tail and its store of the header.
+func TestRingReadStopsAtUnpublishedClaim(t *testing.T) {
+	r := newTestRing(t, MinCapacity)
+	first := make([]byte, r.MaxMessageSize())
+	binary.LittleEndian.PutUint32(first[8:], RecordHeaderSize)
+	binary.LittleEndian.PutUint32(first[12:], 7)
+	require.NoError(t, r.TryWrite(1, first))
+	require.NoError(t, r.TryWrite(1, make([]byte, r.MaxMessageSize())))
+	_, err := r.Read(2, func(uint32, []byte) {})
+	require.NoError(t, err)
+
+	require.NoError(t, r.TryWrite(2, []byte("12345678")))
+	r.hdr.tail.Add(16)
+
+	var types []uint32
+	n, err := r.Read(10, func(typ uint32, _ []byte) { types = append(types, typ) })
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []uint32{2}, types, "the reader must stop at the unpublished claim")
+}
+
 // TestRingManyProducers is the contended path: several goroutines claim
 // concurrently while a single reader drains, which is the arrangement the ring
 // is designed for.
@@ -251,7 +299,8 @@ func TestRingManyProducers(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
-				msg := []byte(fmt.Sprintf("%d:%d", id, i))
+				// Varied sizes put later headers on earlier payload bytes.
+				msg := []byte(fmt.Sprintf("%d:%d:%s", id, i, strings.Repeat("#", (i*7+id)%61)))
 				for {
 					err := r.TryWrite(uint32(id), msg)
 					if err == nil {
