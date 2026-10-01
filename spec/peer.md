@@ -14,8 +14,8 @@ A peer exits 0 on success. On any failure it prints the reason to stderr and exi
 | `send` | `<name> <sender> <count>` | Open queue `name`. Send `count` messages with type `i` and payload `<sender>:<i>`, for `i` from 0. Close. |
 | `listen-echo` | `<name> <capacity>` | Listen on `name` with `capacity`. Print `ready`. Copy every byte read back to the writer until end-of-stream. Close, which sends end-of-stream back. Unlink. |
 | `dial-check` | `<name> <bytes>` | Dial `name`. Write `bytes` bytes, where byte `i` is `(i * 31 + 7) mod 256`, then CloseWrite. At the same time, read until end-of-stream. Require exactly `bytes` bytes back, equal to what was written. Close. |
-| `typed-send` | `<name>` | Open queue `name`. Send each value of `spec/vectors/schema/values.json` in order, encoded with the `ipcgen` code for this language, with the message type ID as the queue type. Close. |
-| `typed-recv` | `<name> <capacity>` | Create queue `name`. Print `ready`. Receive one message per value in `values.json`, decode it by its type ID, and require it to equal the value. Print `ok`. Close and unlink. |
+| `typed-send` | `<name>` | Open queue `name`. For each entry `i` of `spec/vectors/schema/values.json`, in order: build the value as the language's generated type, encode it with the generated encoder, and send it with the message's generated type ID as the queue record type. Close. |
+| `typed-recv` | `<name> <capacity>` | Create queue `name` with `capacity`. Print `ready`. Receive one message per entry of `values.json`. For entry `i`, the record type must equal that message's type ID. Decode the payload with the generated decoder that the type ID selects, then encode the decoded value again. The bytes must equal `spec/vectors/schema/<i>.bin`. Print `ok <count>`, where `count` is the number of entries. Close and unlink. |
 
 `dial-check` writes and reads at the same time. The ring holds less than the stream, so a peer that writes everything before it reads deadlocks.
 

@@ -295,4 +295,23 @@ func TestInterop(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("typed", func(t *testing.T) {
+		values, err := readValues()
+		require.NoError(t, err)
+		for _, rl := range ls {
+			for _, sl := range ls {
+				t.Run(sl+"->"+rl, func(t *testing.T) {
+					t.Parallel()
+					ctx := cellContext(t)
+					name := endpointName(t, "typed")
+					recv := startPeer(t, ctx, rl, "typed-recv", name, strconv.Itoa(capacity))
+					recv.waitReady(t)
+					send := startPeer(t, ctx, sl, "typed-send", name)
+					runCell(t, recv, []*proc{send}, fmt.Sprintf("ok %d", len(values)))
+					requireNoLeftovers(t, name)
+				})
+			}
+		}
+	})
 }

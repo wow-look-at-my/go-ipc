@@ -90,6 +90,33 @@ TEST(Peer, ListenEchoAndDialCheck)
 	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name + ".c2o"));
 }
 
+TEST(Peer, TypedSendAndRecv)
+{
+	auto name = testutil::unique_name("peer");
+	testutil::queue_files f{name};
+	auto recv = spawn_peer({"typed-recv", name, "4096"});
+	ASSERT_EQ(read_line(recv.out), "ready");
+	auto send = spawn_peer({"typed-send", name});
+	EXPECT_EQ(finish(send), 0);
+	std::string done = read_line(recv.out);
+	EXPECT_TRUE(done.starts_with("ok ") && std::stoi(done.substr(3)) > 0) << done;
+	EXPECT_EQ(finish(recv), 0);
+	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name));
+}
+
+// typed-recv must reject a record whose type is not the next entry's type ID.
+TEST(Peer, TypedRecvRejectsAWrongType)
+{
+	auto name = testutil::unique_name("peer");
+	testutil::queue_files f{name};
+	auto recv = spawn_peer({"typed-recv", name, "4096"});
+	ASSERT_EQ(read_line(recv.out), "ready");
+	auto send = spawn_peer({"send", name, "a", "1"});
+	EXPECT_EQ(finish(send), 0);
+	EXPECT_EQ(finish(recv), 1);
+	EXPECT_FALSE(testutil::file_exists("/dev/shm/go-shm-" + name));
+}
+
 TEST(Peer, BadArgumentsFail)
 {
 	auto p = spawn_peer({"recv", "x"});
