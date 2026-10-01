@@ -39,7 +39,7 @@ namespace detail {
 // also wakes the receiver.
 class claim_sink {
 public:
-	virtual void publish(std::byte *rec, std::int32_t total, bool abort) = 0;
+	virtual void publish(std::byte *rec, std::int32_t total, bool abort, int slot) = 0;
 
 protected:
 	~claim_sink() = default;
@@ -77,7 +77,7 @@ class Claim {
 public:
 	Claim() = default;
 	Claim(Claim &&o) noexcept
-		: rec_(std::exchange(o.rec_, nullptr)), total_(o.total_), sink_(std::move(o.sink_)) {}
+		: rec_(std::exchange(o.rec_, nullptr)), total_(o.total_), slot_(o.slot_), sink_(std::move(o.sink_)) {}
 	Claim &operator=(Claim &&o) noexcept
 	{
 		if (this != &o) {
@@ -85,6 +85,7 @@ public:
 				abort();
 			rec_ = std::exchange(o.rec_, nullptr);
 			total_ = o.total_;
+			slot_ = o.slot_;
 			sink_ = std::move(o.sink_);
 		}
 		return *this;
@@ -116,8 +117,8 @@ private:
 	friend class Ring;
 	friend class Queue;
 
-	Claim(std::byte *rec, std::int32_t total, std::shared_ptr<detail::claim_sink> sink)
-		: rec_(rec), total_(total), sink_(std::move(sink)) {}
+	Claim(std::byte *rec, std::int32_t total, int slot, std::shared_ptr<detail::claim_sink> sink)
+		: rec_(rec), total_(total), slot_(slot), sink_(std::move(sink)) {}
 
 	void finish(bool abort)
 	{
@@ -126,7 +127,7 @@ private:
 		std::byte *rec = std::exchange(rec_, nullptr);
 		auto sink = std::move(sink_);
 		if (sink) {
-			sink->publish(rec, total_, abort);
+			sink->publish(rec, total_, abort, slot_);
 		} else if (abort) {
 			detail::abort_record(rec, total_);
 		} else {
@@ -136,7 +137,17 @@ private:
 
 	std::byte *rec_ = nullptr;
 	std::int32_t total_ = 0;
+	int slot_ = -1;
 	std::shared_ptr<detail::claim_sink> sink_;
+};
+
+// stall is a claim that stops the reader at head: its producer has not
+// written the header yet, or has not committed it.
+struct stall {
+	std::uint64_t at = 0;
+	std::int32_t length = 0;
+	// slots holds every slot whose intent covers at.
+	std::vector<int> slots;
 };
 
 // Ring is a view of a ring in a caller buffer. Any number of threads in any
