@@ -35,14 +35,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      # The go-toolchain action reads yq when it runs in a working directory, and the Windows image has none.
-      - if: runner.os == 'Windows'
-        run: choco install yq -y --no-progress
-      # Every language's generated code comes from ipcgen, so it builds first.
-      - uses: wow-look-at-my/go-toolchain@master
+      # The C, C++ and Python generated code comes from ipcgen, so it builds first. The Go modules generate their own code with go:generate on every host.
+      - if: runner.os == 'Linux'
+        uses: wow-look-at-my/go-toolchain@master
         with:
           working-directory: ipcgen
-          autorelease: false
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtest-dev jq
       - if: runner.os == 'Linux'
