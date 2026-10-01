@@ -53,4 +53,4 @@ prepare: require
 	cp $(GEN_DIR)/go/demo/demo.go go/demo/demo.go
 
 clean:
-	rm -rf $(OUT) go/demo/demo.go go/build
+	rm -rf $(OUT) go/demo/demo.go go/build py/__pycache__
