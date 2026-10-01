@@ -167,24 +167,26 @@ func (g *goGen) marshal(m *schema.Message) {
 	w.line("}")
 	w.line("")
 	w.line("// MarshalBinary returns the encoding of m.")
-	w.line("func (m *%s) MarshalBinary() ([]byte, error) {", m.Name)
-	w.line("\tb := make([]byte, m.Size())")
-	w.line("\tif _, ok := m.ipcgenMarshal(b); !ok {")
-	w.line("\t\treturn nil, errIpcgenTooLong")
-	w.line("\t}")
-	w.line("\treturn b, nil")
-	w.line("}")
-	w.line("")
-	w.line("func (m *%s) ipcgenMarshal(b []byte) (int, bool) {", m.Name)
 	var fits []string
 	for _, f := range m.VarFields() {
 		fits = append(fits, fmt.Sprintf("!ipcgenFits(len(m.%s))", schema.Camel(f.Name)))
 	}
-	if len(fits) > 0 {
-		w.line("\tif %s {", strings.Join(fits, " || "))
-		w.line("\t\treturn 0, false")
-		w.line("\t}")
+	tooLong := func(ret string) {
+		if len(fits) > 0 {
+			w.line("\tif %s {", strings.Join(fits, " || "))
+			w.line("\t\treturn %s", ret)
+			w.line("\t}")
+		}
 	}
+	w.line("func (m *%s) MarshalBinary() ([]byte, error) {", m.Name)
+	tooLong("nil, errIpcgenTooLong")
+	w.line("\tb := make([]byte, m.Size())")
+	w.line("\tm.ipcgenMarshal(b)")
+	w.line("\treturn b, nil")
+	w.line("}")
+	w.line("")
+	w.line("func (m *%s) ipcgenMarshal(b []byte) (int, bool) {", m.Name)
+	tooLong("0, false")
 	w.line("\tif len(b) < m.Size() {")
 	w.line("\t\treturn 0, false")
 	w.line("\t}")

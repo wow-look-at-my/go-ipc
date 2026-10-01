@@ -23,6 +23,7 @@ type jsonField struct {
 
 type jsonMessage struct {
 	Name      string       `json:"name"`
+	Snake     string       `json:"snake"`
 	ID        uint32       `json:"id"`
 	FixedSize int          `json:"fixed_size"`
 	Align     int          `json:"align"`
@@ -49,7 +50,7 @@ func toJSONType(t *schema.Type) *jsonType {
 func genJSON(s *schema.Schema) ([]byte, error) {
 	out := jsonSchema{Comment: Header, Package: s.Package, Messages: []*jsonMessage{}}
 	for _, m := range s.Messages {
-		jm := &jsonMessage{Name: m.Name, ID: m.ID, FixedSize: m.FixedSize, Align: m.Align, Fields: []*jsonField{}}
+		jm := &jsonMessage{Name: m.Name, Snake: m.Snake(), ID: m.ID, FixedSize: m.FixedSize, Align: m.Align, Fields: []*jsonField{}}
 		for _, f := range m.Fields {
 			jf := &jsonField{Name: f.Name, Type: toJSONType(f.Type)}
 			if !f.IsVar() {
