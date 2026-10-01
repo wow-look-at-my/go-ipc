@@ -630,6 +630,23 @@ class ProcessTest(Named):
 			self.assertEqual(q.recv(timeout=support.BOUND), (i, b"peer:%d" % i))
 		sender.finish(self)
 
+	def test_typed_peers(self) -> None:
+		count = len(support.load_json("vectors", "schema", "values.json"))
+		name = support.unique_name("pt")
+		recv = support.Peer("typed-recv", name, CAP)
+		recv.wait_ready(self)
+		support.Peer("typed-send", name).finish(self)
+		self.assertEqual(recv.finish(self), ["ok %d" % count])
+
+	def test_typed_recv_rejects_a_wrong_type(self) -> None:
+		name = support.unique_name("pt2")
+		recv = support.Peer("typed-recv", name, CAP)
+		recv.wait_ready(self)
+		with goipc.Queue.open(name) as q:
+			q.send(b"not a message", type=0xFFFFFFF0, timeout=support.BOUND)
+		recv.finish(self, want_code=1)
+		self.assertIn("record type", recv.last_stderr)
+
 	def test_echo_peers(self) -> None:
 		name = support.unique_name("pc")
 		echo = support.Peer("listen-echo", name, CAP)

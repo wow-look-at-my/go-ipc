@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
+import importlib
+import json
 import os
 import sys
 import threading
-from typing import Callable, Dict, List
+from typing import Any, Callable, Dict, List
 
 from ._endpoints import Conn, Queue
 
@@ -144,11 +147,95 @@ def role_dial_check(args: List[str]) -> None:
 		conn.close()
 
 
+def _schema_dir() -> str:
+	spec = os.environ.get("GOIPC_SPEC_DIR")
+	if not spec:
+		raise PeerError("GOIPC_SPEC_DIR is not set; it must name the spec directory")
+	return os.path.join(spec, "vectors", "schema")
+
+
+def _demo() -> Any:
+	try:
+		return importlib.import_module("demo")
+	except ImportError as exc:
+		raise PeerError("the generated module demo is not on PYTHONPATH: %s" % (exc,))
+
+
+def _from_json(template: Any, value: Any) -> Any:
+	# A generated dataclass defaults every field to a value of its own type,
+	# and every fixed array to its full length, so the default is the schema.
+	if dataclasses.is_dataclass(template):
+		return _build(type(template), value)
+	if isinstance(template, list):
+		return [_from_json(template[0], v) for v in value]
+	if isinstance(template, bool):
+		return value
+	if isinstance(template, int):
+		return int(value)
+	if isinstance(template, float):
+		return float(value)
+	if isinstance(template, bytes):
+		return bytes.fromhex(value)
+	return value
+
+
+def _build(cls: Any, value: Dict[str, Any]) -> Any:
+	template = cls()
+	names = [f.name for f in dataclasses.fields(cls)]
+	if sorted(names) != sorted(value):
+		raise PeerError("%s: values.json keys %s do not match fields %s" % (cls.__name__, sorted(value), sorted(names)))
+	return cls(**{n: _from_json(getattr(template, n), value[n]) for n in names})
+
+
+def _values() -> List[Dict[str, Any]]:
+	with open(os.path.join(_schema_dir(), "values.json"), encoding="utf-8") as f:
+		return json.load(f)
+
+
+def role_typed_send(args: List[str]) -> None:
+	_arity(args, "<name>")
+	demo = _demo()
+	with Queue.open(args[0]) as q:
+		for entry in _values():
+			cls = getattr(demo, entry["message"])
+			q.send(_build(cls, entry["value"]).encode(), type=cls.TYPE_ID)
+
+
+def role_typed_recv(args: List[str]) -> None:
+	_arity(args, "<name> <capacity>")
+	name = args[0]
+	(capacity,) = _ints(args[1:], ["capacity"])
+	demo = _demo()
+	values = _values()
+	q = Queue.create(name, capacity)
+	try:
+		_ready()
+		for i, entry in enumerate(values):
+			type_, payload = q.recv()
+			want = getattr(demo, entry["message"])
+			if type_ != want.TYPE_ID:
+				raise PeerError("entry %d: record type %d, want %d (%s)" % (i, type_, want.TYPE_ID, entry["message"]))
+			decoded = demo.MESSAGES[type_].decode(payload)
+			with open(os.path.join(_schema_dir(), "%d.bin" % i), "rb") as f:
+				expected = f.read()
+			if decoded.encode() != expected:
+				raise PeerError("entry %d: re-encoding differs from %d.bin" % (i, i))
+		sys.stdout.write("ok %d\n" % len(values))
+		sys.stdout.flush()
+	finally:
+		try:
+			q.unlink()
+		finally:
+			q.close()
+
+
 ROLES: Dict[str, Callable[[List[str]], None]] = {
 	"recv": role_recv,
 	"send": role_send,
 	"listen-echo": role_listen_echo,
 	"dial-check": role_dial_check,
+	"typed-send": role_typed_send,
+	"typed-recv": role_typed_recv,
 }
 
 
