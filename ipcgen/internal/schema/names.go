@@ -58,7 +58,7 @@ var reservedWords = setOf(
 	"type", "var",
 	// Python.
 	"as", "async", "await", "def", "del", "elif", "except", "finally", "from", "global", "in", "is", "lambda",
-	"nonlocal", "pass", "raise", "with", "yield", "none",
+	"nonlocal", "pass", "raise", "with", "yield", "none", "self", "cls",
 	// Members that generated code declares on every message.
 	"size", "encode", "decode", "type_id", "fixed_size",
 )
