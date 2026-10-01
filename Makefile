@@ -1,13 +1,17 @@
 # The single entry point for every implementation. Each language directory
 # has a Makefile with build, test and clean targets, and this file fans out
 # to them in parallel.
+#
+# go-toolchain at the root also runs every nested Go module, which includes
+# interop/ and codegen/go/. Those need the C, C++ and Python peers and the
+# generated code, so the root Go run comes last. ipcgen is its own module
+# and builds first, because every language's generated code comes from it.
 MAKEFLAGS += -j$(shell nproc) --output-sync=target
 
 ROOT := $(CURDIR)
 BUILD := $(ROOT)/build
 GEN := $(BUILD)/gen
-IPCGEN := $(BUILD)/ipcgen
-GO_STAMP := $(BUILD)/.go-toolchain.stamp
+IPCGEN := $(ROOT)/ipcgen/build/ipcgen
 SCHEMA := $(ROOT)/spec/vectors/schema/example.ipc
 
 export GOIPC_SPEC_DIR := $(ROOT)/spec
@@ -19,50 +23,57 @@ export PYTHONPATH := $(ROOT)/python:$(GEN)/py
 
 SUBMAKE = $(MAKE) GEN_DIR=$(GEN) IPCGEN=$(IPCGEN)
 
-.PHONY: all build test clean gen \
+.PHONY: all build test native clean gen ipcgen prepare-go \
 	build-c build-cpp \
-	test-go test-c test-cpp test-py test-codegen test-interop
+	test-go test-c test-cpp test-py test-codegen
 
 all: build
 
-build: $(GO_STAMP) build-c build-cpp
+build: build-c build-cpp prepare-go
 
-test: test-go test-c test-cpp test-py test-codegen test-interop
+# native is everything except the root Go run. CI runs it, then hands the
+# root run to the go-toolchain action.
+native: build test-c test-cpp test-py test-codegen
 
-# go-toolchain tests the root module and builds build/ipcgen in the same run.
-$(GO_STAMP): $(shell find $(ROOT) -maxdepth 3 -name '*.go' -not -path '*/interop/*' -not -path '*/codegen/*') go.mod spec/wire.json
+test: native
+	$(MAKE) test-go
+
+# This run covers the root package, ipcgen, codegen/go and interop/.
+test-go:
 	go-toolchain --no-benchmark
-	touch $@
 
-test-go: $(GO_STAMP)
+ipcgen $(IPCGEN):
+	cd ipcgen && go-toolchain --no-benchmark
 
-gen: $(GO_STAMP)
+gen: $(IPCGEN)
 	mkdir -p $(GEN)/go/demo $(GEN)/c $(GEN)/cpp $(GEN)/py
-	$(IPCGEN) -lang go -o $(GEN)/go/demo/demo.go $(SCHEMA)
-	$(IPCGEN) -lang c -o $(GEN)/c/demo.h $(SCHEMA)
-	$(IPCGEN) -lang cpp -o $(GEN)/cpp/demo.hpp $(SCHEMA)
-	$(IPCGEN) -lang py -o $(GEN)/py/demo.py $(SCHEMA)
+	$(IPCGEN) --lang go --out $(GEN)/go/demo/demo.go $(SCHEMA)
+	$(IPCGEN) --lang c --out $(GEN)/c/demo.h $(SCHEMA)
+	$(IPCGEN) --lang cpp --out $(GEN)/cpp/demo.hpp $(SCHEMA)
+	$(IPCGEN) --lang py --out $(GEN)/py/demo.py $(SCHEMA)
 
-build-c:
+# The Go modules that use generated code take a copy, which git ignores.
+prepare-go: gen
+	$(SUBMAKE) -C codegen prepare
+	$(SUBMAKE) -C interop prepare
+
+build-c: gen
 	$(SUBMAKE) -C c build
 
-build-cpp:
+build-cpp: gen
 	$(SUBMAKE) -C cpp build
 
-test-c:
+test-c: gen
 	$(SUBMAKE) -C c test
 
-test-cpp:
+test-cpp: gen
 	$(SUBMAKE) -C cpp test
 
-test-py: build-c
+test-py: build-c gen
 	$(SUBMAKE) -C python test
 
 test-codegen: gen
 	$(SUBMAKE) -C codegen test
-
-test-interop: build-c build-cpp gen
-	$(SUBMAKE) -C interop test
 
 clean:
 	$(MAKE) -C c clean
@@ -70,4 +81,4 @@ clean:
 	$(MAKE) -C python clean
 	$(MAKE) -C codegen clean
 	$(MAKE) -C interop clean
-	rm -rf $(BUILD)
+	rm -rf $(BUILD) $(ROOT)/ipcgen/build

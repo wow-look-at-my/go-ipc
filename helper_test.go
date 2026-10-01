@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,15 @@ import (
 )
 
 var nameCounter atomic.Uint64
+
+// contextWithTimeout bounds a blocking call in a test, so a defect fails the
+// test rather than hangs it.
+func contextWithTimeout(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
 
 // waitForWaiters blocks until the ring reports at least the given number of
 // parked receivers and senders.
