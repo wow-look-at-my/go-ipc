@@ -36,7 +36,9 @@ TEST(ring_init_and_attach_errors, 0)
 	REQUIRE_RC(goipc_ring_attach(&r, buf, goipc_ring_size(8192)), GOIPC_OK);
 	REQUIRE_RC(goipc_ring_attach(&r, buf, goipc_ring_size(8192) - 1), GOIPC_EBADLAYOUT);
 
-	h->version = 2;
+	h->version = 1;
+	REQUIRE_RC(goipc_ring_attach(&r, buf, goipc_ring_size(8192)), GOIPC_EBADLAYOUT);
+	h->version = 3;
 	REQUIRE_RC(goipc_ring_attach(&r, buf, goipc_ring_size(8192)), GOIPC_EBADLAYOUT);
 	h->version = GOIPC_RING_VERSION;
 	h->capacity = 6000;

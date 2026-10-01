@@ -82,7 +82,7 @@ TEST(peer_recv_and_send_roles, T_FORK)
 	CHECK(strcmp(line, "ok 3000\n") == 0, "recv printed %s", line);
 	REQUIRE(finish(&r) == 0, "recv failed");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "recv left %s behind", path);
 }
 
@@ -100,7 +100,7 @@ TEST(peer_listen_echo_and_dial_check_roles, T_FORK)
 	CHECK(finish(&d) == 0, "dial-check failed");
 	CHECK(finish(&l) == 0, "listen-echo failed");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s.c2o", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.c2o.name", name);
 	CHECK(!path_exists(path), "listen-echo left %s behind", path);
 }
 
@@ -121,7 +121,7 @@ TEST(peer_typed_send_and_recv_roles, T_FORK)
 	CHECK(strncmp(line, "ok ", 3) == 0 && atoi(line + 3) > 0, "typed-recv printed %s", line);
 	REQUIRE(finish(&r) == 0, "typed-recv failed");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "typed-recv left %s behind", path);
 }
 
@@ -141,7 +141,7 @@ TEST(peer_typed_recv_rejects_a_wrong_type, T_FORK)
 	CHECK(finish(&s) == 0, "send failed");
 	CHECK(finish(&r) == 1, "typed-recv accepted a record of type 0");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "typed-recv left %s behind", path);
 }
 

@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -181,12 +184,12 @@ TEST(queue_claim_records_its_intent, 0)
 		CHECK(atomic_load(&h->slots[i].at) == UINT64_MAX, "slot %zu keeps an intent", i);
 
 	/* Close returns the slots to the shared pool. */
-	goipc_queue *s;
-	REQUIRE_RC(goipc_queue_open(name, &s), GOIPC_OK);
+	goipc_queue *other;
+	REQUIRE_RC(goipc_queue_open(name, &other), GOIPC_OK);
 	REQUIRE_RC(goipc_queue_close(q), GOIPC_OK);
 	for (size_t i = 0; i < GOIPC_CLAIM_SLOTS; i++)
-		CHECK(atomic_load(&hdr_of(s)->slots[i].owner) == 0, "slot %zu kept its owner", i);
-	goipc_queue_destroy(s);
+		CHECK(atomic_load(&hdr_of(other)->slots[i].owner) == 0, "slot %zu kept its owner", i);
+	goipc_queue_destroy(other);
 	drop(q);
 }
 
@@ -628,6 +631,134 @@ TEST(fork_child_has_its_own_identity, T_FORK)
 	char *path = goipc__life_path(child);
 	unlink(path);
 	free(path);
+}
+
+/* ---- watches, driven by a fake process ---- */
+
+/* fake_process listens on a life socket for a made-up procID. Closing the
+ * returned fd ends the fake process: watches see their connection end, and
+ * checks find a socket that refuses. */
+static int fake_process(uint64_t *id)
+{
+	static atomic_int seq;
+	*id = GOIPC_PROC_WATCHABLE | GOIPC_PROC_ANY | ((uint64_t)getpid() << 20) | (uint64_t)atomic_fetch_add(&seq, 1);
+	char *path = goipc__life_path(*id);
+	struct sockaddr_un addr = {.sun_family = AF_UNIX};
+	REQUIRE(strlen(path) < sizeof addr.sun_path);
+	strcpy(addr.sun_path, path);
+	free(path);
+	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	REQUIRE(fd >= 0);
+	REQUIRE(bind(fd, (struct sockaddr *)&addr, sizeof addr) == 0 && listen(fd, 16) == 0);
+	return fd;
+}
+
+static void end_fake(uint64_t id, int fd)
+{
+	(void)id;
+	close(fd);
+}
+
+static void forget_fake(uint64_t id)
+{
+	char *path = goipc__life_path(id);
+	unlink(path);
+	free(path);
+}
+
+static void note_exit(void *arg, uint64_t id, int err)
+{
+	int *fds = arg;
+	(void)id;
+	uint8_t b = err == 0 ? 'x' : 'e';
+	if (write(fds[1], &b, 1) != 1)
+		abort();
+}
+
+TEST(on_exit_reports_exit_and_cancel_stops_it, T_THREADS)
+{
+	uint64_t id;
+	int fd = fake_process(&id);
+	CHECK(!goipc__is_dead(id));
+	int first[2], second[2];
+	REQUIRE(pipe(first) == 0 && pipe(second) == 0);
+	uint64_t k1, k2;
+	REQUIRE_RC(goipc__on_exit(id, note_exit, first, &k1), GOIPC_OK);
+	REQUIRE_RC(goipc__on_exit(id, note_exit, second, &k2), GOIPC_OK);
+	goipc__cancel_exit(k2);
+
+	end_fake(id, fd);
+	uint8_t b = 0;
+	REQUIRE(read(first[0], &b, 1) == 1);
+	CHECK(b == 'x', "the watch reported a failure");
+	CHECK(goipc__is_dead(id));
+	REQUIRE(fcntl(second[0], F_SETFL, O_NONBLOCK) == 0);
+	CHECK(read(second[0], &b, 1) < 0 && errno == EAGAIN, "a cancelled watch fired");
+
+	/* A gone process is reported at once, and nothing is registered. */
+	uint64_t k3;
+	CHECK_RC(goipc__on_exit(id, note_exit, first, &k3), GOIPC_EPEERGONE);
+	forget_fake(id);
+	for (int i = 0; i < 2; i++) {
+		close(first[i]);
+		close(second[i]);
+	}
+}
+
+/* A sender parked on a full queue wakes with peer-gone when the receiver's
+ * process ends. */
+TEST(parked_sender_wakes_when_receiver_process_ends, T_THREADS)
+{
+	char name[96];
+	goipc_queue *q = receiver(name, sizeof name, 4096);
+	uint64_t id;
+	int fd = fake_process(&id);
+	atomic_store(&hdr_of(q)->consumer, id);
+
+	goipc_queue *s;
+	REQUIRE_RC(goipc_queue_open(name, &s), GOIPC_OK);
+	static const uint8_t payload[512];
+	while (goipc_queue_try_send(s, 0, payload, sizeof payload) == GOIPC_OK)
+		;
+	struct send_op o = {.q = s, .rc = 99};
+	pthread_t th;
+	REQUIRE(pthread_create(&th, NULL, send_thread, &o) == 0);
+	pause_ms(50);
+	CHECK(!atomic_load(&o.done), "send returned on a full queue");
+
+	end_fake(id, fd);
+	pthread_join(th, NULL);
+	CHECK_RC(o.rc, GOIPC_EPEERGONE);
+	CHECK_RC(goipc_queue_try_send(s, 0, payload, sizeof payload), GOIPC_EPEERGONE);
+	goipc_queue_destroy(s);
+	forget_fake(id);
+	atomic_store(&hdr_of(q)->consumer, goipc__self_id());
+	drop(q);
+}
+
+/* A receiver parked behind the claim of a live producer wakes when that
+ * producer's process ends, and reclaims the claim. */
+TEST(parked_receiver_wakes_when_producer_process_ends, T_THREADS)
+{
+	char name[96];
+	goipc_queue *q = receiver(name, sizeof name, 4096);
+	uint64_t id;
+	int fd = fake_process(&id);
+	strand(q, id, 5, 32, true);
+	REQUIRE_RC(goipc_queue_try_send(q, 0, "after", 5), GOIPC_OK);
+
+	struct recv_op o = {.q = q, .timeout = MS(10000), .rc = 99};
+	pthread_t th;
+	REQUIRE(pthread_create(&th, NULL, recv_thread, &o) == 0);
+	pause_ms(50);
+	CHECK(!atomic_load(&o.done), "receive passed a live producer's claim");
+
+	end_fake(id, fd);
+	pthread_join(th, NULL);
+	REQUIRE_RC(o.rc, GOIPC_OK);
+	CHECK(o.len == 5 && memcmp(o.buf, "after", 5) == 0);
+	forget_fake(id);
+	drop(q);
 }
 
 /* ---- channels ---- */

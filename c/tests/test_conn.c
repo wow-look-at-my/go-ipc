@@ -170,10 +170,11 @@ TEST(conn_close_write_half_closes, 0)
 	REQUIRE_RC(goipc_conn_read(d, buf, sizeof buf, MS(1000), &n), GOIPC_OK);
 	REQUIRE(n == 5 && memcmp(buf, "reply", 5) == 0);
 
-	/* Close after close_write sends no second end-of-stream. */
+	/* Close after close_write sends no second end-of-stream. The empty
+	 * channel then reports its closed peer. */
 	REQUIRE_RC(goipc_conn_close(d), GOIPC_OK);
 	uint32_t type;
-	REQUIRE_RC(goipc_queue_try_recv(goipc_channel_rx(goipc_conn_channel(l)), buf, sizeof buf, &type, &n), GOIPC_EEMPTY);
+	REQUIRE_RC(goipc_queue_try_recv(goipc_channel_rx(goipc_conn_channel(l)), buf, sizeof buf, &type, &n), GOIPC_EPEERGONE);
 	goipc_conn_destroy(d);
 	REQUIRE_RC(goipc_conn_close(l), GOIPC_OK);
 	goipc_conn_unlink(l);
