@@ -160,7 +160,9 @@ goipc_channel *goipc_conn_channel(goipc_conn *c);
 int goipc_conn_read(goipc_conn *c, void *buf, size_t cap, int64_t timeout_ns, size_t *nread);
 /* *written holds the bytes sent, which is less than len only on an error. */
 int goipc_conn_write(goipc_conn *c, const void *buf, size_t len, int64_t timeout_ns, size_t *written);
-/* Sends end-of-stream, best effort, then closes the channel. */
+/* Sends end-of-stream with a blocking send. Later writes return GOIPC_ECLOSED; reads keep working. */
+int goipc_conn_close_write(goipc_conn *c, int64_t timeout_ns);
+/* Sends end-of-stream, best effort, unless close_write sent it. Then closes the channel. */
 int goipc_conn_close(goipc_conn *c);
 int goipc_conn_unlink(goipc_conn *c);
 void goipc_conn_destroy(goipc_conn *c);
