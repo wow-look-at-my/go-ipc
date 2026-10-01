@@ -38,10 +38,10 @@ test-go: $(GO_STAMP)
 
 gen: $(GO_STAMP)
 	mkdir -p $(GEN)/go/demo $(GEN)/c $(GEN)/cpp $(GEN)/py
-	$(IPCGEN) -lang go -o $(GEN)/go/demo/demo.go $(SCHEMA)
-	$(IPCGEN) -lang c -o $(GEN)/c/demo.h $(SCHEMA)
-	$(IPCGEN) -lang cpp -o $(GEN)/cpp/demo.hpp $(SCHEMA)
-	$(IPCGEN) -lang py -o $(GEN)/py/demo.py $(SCHEMA)
+	$(IPCGEN) --lang go --out $(GEN)/go/demo/demo.go $(SCHEMA)
+	$(IPCGEN) --lang c --out $(GEN)/c/demo.h $(SCHEMA)
+	$(IPCGEN) --lang cpp --out $(GEN)/cpp/demo.hpp $(SCHEMA)
+	$(IPCGEN) --lang py --out $(GEN)/py/demo.py $(SCHEMA)
 
 build-c:
 	$(SUBMAKE) -C c build
