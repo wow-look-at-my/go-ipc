@@ -6,7 +6,7 @@ Every implementation ships a peer program. The cross-language suite in `interop/
 peer <role> <args...>
 ```
 
-A peer exits 0 on success. On any failure it prints the reason to stderr and exits 1. Each role gives up after seconds and fails. A role that creates an endpoint prints `ready` and a newline to stdout, and flushes, once the endpoint exists. The suite waits for that line before it starts the other side.
+A peer exits 0 on success. On any failure it prints the reason to stderr and exits 1. Each role gives up and fails after one minute. A role that creates an endpoint prints `ready` and a newline to stdout, and flushes, once the endpoint exists. The suite waits for that line before it starts the other side.
 
 | role | arguments | behavior |
 | --- | --- | --- |

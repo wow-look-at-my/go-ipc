@@ -67,7 +67,7 @@ For a payload of `n` bytes, `rec = 8 + n` and `need = align8(rec)`.
 
 1. Load `tail`. Load `head_cache`.
 2. `index = tail & mask` and `to_end = capacity - index`. When `to_end < need`, the claim also covers a padding record over the remaining bytes, so `need = align8(rec) + to_end`.
-3. When `capacity - (tail - head_cache) < need`, load `head`. When it is still too small, report full. Otherwise store `head` into `head_cache`.
+3. The cached head has room when `head_cache <= tail`, `tail - head_cache <= capacity` and `capacity - (tail - head_cache) >= need`. When it has no room, load `head`. When `head > tail`, go back to step 1, because another producer moved `tail`. When `head` has no room by the same test, report full. Otherwise store `head` into `head_cache`.
 4. Compare-and-swap `tail` from `tail` to `tail + need`. On failure, go back to step 1.
 5. When the claim covers padding: store `type = 0xFFFFFFFF` at `index`, then store `len = to_end` at `index`. The record then starts at index 0.
 6. Store `len = -rec` at the record. Store `type`.
@@ -79,10 +79,14 @@ For a payload of `n` bytes, `rec = 8 + n` and `need = align8(rec)`.
 1. Load `head`. Load `tail`. `available = tail - head`.
 2. At `(head + consumed) & mask`, load `len`. Stop when `len <= 0`.
 3. When `len < 8` or `align8(len) > available - consumed`, report corrupt.
-4. Deliver the record unless its type is padding. Store `len = 0`. Add `align8(len)` to `consumed`.
+4. Deliver the record unless its type is padding. Zero all `align8(len)` bytes of the record, and store `len = 0` atomically. Add `align8(len)` to `consumed`.
 5. After the loop, when `consumed > 0`, store `head + consumed` into `head`.
 
 A receive that finds the next record too large for the caller's buffer does not consume it.
+
+Every byte of the data region outside `[head, tail)` is zero. The reader keeps this true, because a producer advances `tail` before it stores its header. In that window the header slot must read as `0`. As a result, the reader stops. A slot that held old payload can read as a length.
+
+A cached head can be more than a lap old. A producer that a scheduler stops between its load of `head` and its store into `head_cache` stores an old value. The room test in step 3 rejects it, because `tail - head_cache` then exceeds the capacity.
 
 ## Event
 
