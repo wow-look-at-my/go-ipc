@@ -10,8 +10,6 @@
 
 #include "internal.h"
 
-#define SERVICE_REGISTRY_SUFFIX ".svc"
-#define SERVICE_CLIENT_PREFIX ".c."
 #define SERVICE_FIRST_SEQ UINT64_C(1)
 
 struct goipc_reply {
@@ -222,7 +220,7 @@ static void *serve(void *arg)
  * finished creating it and knocks when it has. */
 static void adopt(goipc_service *s, const char *id)
 {
-	char *name = goipc__join(s->name, SERVICE_CLIENT_PREFIX, id);
+	char *name = goipc__join(s->name, GOIPC_SERVICE_CLIENT_PREFIX, id);
 	if (name == NULL)
 		return;
 	goipc_channel *ch;
@@ -277,7 +275,7 @@ static void adopt(goipc_service *s, const char *id)
  * found here. */
 static void scan_clients(goipc_service *s)
 {
-	char *prefix = goipc__join(GOIPC_NAME_PREFIX, s->name, SERVICE_CLIENT_PREFIX);
+	char *prefix = goipc__join(GOIPC_NAME_PREFIX, s->name, GOIPC_SERVICE_CLIENT_PREFIX);
 	if (prefix == NULL)
 		return;
 	size_t plen = strlen(prefix);
@@ -351,7 +349,7 @@ int goipc_service_serve(const char *name, size_t capacity, goipc_service_fn fn, 
 	s->gone = gone;
 	s->ctx = ctx;
 	s->name = strdup(name);
-	char *reg = goipc__join(name, SERVICE_REGISTRY_SUFFIX, "");
+	char *reg = goipc__join(name, GOIPC_SERVICE_REGISTRY_SUFFIX, "");
 	if (s->name == NULL || reg == NULL) {
 		free(reg);
 		free(s->name);
@@ -442,7 +440,7 @@ struct goipc_client {
  * nothing. */
 static void knock(const char *name, const char *id, const struct timespec *deadline)
 {
-	char *reg = goipc__join(name, SERVICE_REGISTRY_SUFFIX, "");
+	char *reg = goipc__join(name, GOIPC_SERVICE_REGISTRY_SUFFIX, "");
 	if (reg == NULL)
 		return;
 	goipc_queue *q;
@@ -476,7 +474,7 @@ int goipc_client_connect(const char *name, size_t capacity, int64_t timeout_ns, 
 	if (c == NULL)
 		return GOIPC_ENOMEM;
 	c->name = strdup(name);
-	char *chname = goipc__join(name, SERVICE_CLIENT_PREFIX, id);
+	char *chname = goipc__join(name, GOIPC_SERVICE_CLIENT_PREFIX, id);
 	if (c->name == NULL || chname == NULL) {
 		free(chname);
 		free(c->name);

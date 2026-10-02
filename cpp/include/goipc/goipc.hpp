@@ -10,5 +10,6 @@
 #include "names.hpp"
 #include "queue.hpp"
 #include "ring.hpp"
+#include "service.hpp"
 
 #endif
