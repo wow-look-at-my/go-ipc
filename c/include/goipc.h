@@ -27,6 +27,12 @@ extern "C" {
 #define GOIPC_DEFAULT_CAPACITY 1048576u
 #define GOIPC_CONN_TYPE_DATA 0u
 #define GOIPC_CONN_TYPE_EOF 1u
+/* The service layer keeps every record type from this one up to the padding type. */
+#define GOIPC_SERVICE_RESERVED_TYPE_MIN UINT32_C(0xFFFFFFF0)
+#define GOIPC_SERVICE_TYPE_KNOCK UINT32_C(0xFFFFFFF0)
+#define GOIPC_SERVICE_TYPE_HELLO UINT32_C(0xFFFFFFF1)
+#define GOIPC_SERVICE_TYPE_ERROR UINT32_C(0xFFFFFFF2)
+#define GOIPC_SERVICE_SEQUENCE_SIZE 8u
 
 typedef enum goipc_err {
 	GOIPC_OK = 0,
@@ -57,7 +63,9 @@ typedef enum goipc_err {
 	/* A receive on a handle that does not own the receiving end. */
 	GOIPC_ENOTCONSUMER = -20,
 	/* Live claims hold every claim slot of the ring. */
-	GOIPC_ETOOMANYCLAIMS = -21
+	GOIPC_ETOOMANYCLAIMS = -21,
+	/* The service handler returned an error. The message is in the reply buffer. */
+	GOIPC_ECALL = -22
 } goipc_err;
 
 /* goipc_strerror returns a static description of err. */
@@ -191,6 +199,48 @@ int goipc_conn_close_write(goipc_conn *c, int64_t timeout_ns);
 int goipc_conn_close(goipc_conn *c);
 int goipc_conn_unlink(goipc_conn *c);
 void goipc_conn_destroy(goipc_conn *c);
+
+/* ---- Service: typed request and reply over a channel per client (spec/service.md) ---- */
+
+typedef struct goipc_service goipc_service;
+typedef struct goipc_session goipc_session;
+typedef struct goipc_reply goipc_reply;
+
+/* A handler answers one request: it calls goipc_reply_set, or goipc_reply_error
+ * for an error the client sees as GOIPC_ECALL. A handler that sets nothing
+ * sends an error. The payload aliases a buffer the session reuses. Each
+ * client's handler runs on a thread of its own, one call at a time. */
+typedef void (*goipc_service_fn)(void *ctx, goipc_session *s, uint32_t type, const uint8_t *payload, size_t len, goipc_reply *reply);
+/* A gone function runs once after a client exits or closes. It may be NULL. */
+typedef void (*goipc_gone_fn)(void *ctx, goipc_session *s);
+
+int goipc_reply_set(goipc_reply *r, uint32_t type, const void *payload, size_t len);
+int goipc_reply_error(goipc_reply *r, const char *message);
+/* */
+uint64_t goipc_session_ordinal(const goipc_session *s);
+
+/* goipc_service_serve creates the service and returns once a client can reach
+ * it. It returns GOIPC_EINUSE while another process serves the name. */
+int goipc_service_serve(const char *name, size_t capacity, goipc_service_fn fn, goipc_gone_fn gone, void *ctx, goipc_service **out);
+/* goipc_service_close stops the service. Clients parked in a call find it
+ * gone. It waits for every handler to return, then removes the name. */
+int goipc_service_close(goipc_service *s);
+void goipc_service_destroy(goipc_service *s);
+
+typedef struct goipc_client goipc_client;
+
+/* goipc_client_connect waits, parked, for a service that does not exist yet. */
+int goipc_client_connect(const char *name, size_t capacity, int64_t timeout_ns, goipc_client **out);
+uint64_t goipc_client_ordinal(const goipc_client *c);
+size_t goipc_client_max_payload_size(const goipc_client *c);
+/* goipc_client_call sends one request and copies the reply into buf. On
+ * GOIPC_ECALL buf holds the handler's message. On GOIPC_EBUFFER *reply_len
+ * holds the size the reply needed, and the reply is dropped. A service that
+ * exited is GOIPC_EPEERGONE. */
+int goipc_client_call(goipc_client *c, uint32_t type, const void *payload, size_t len, int64_t timeout_ns,
+                      uint32_t *reply_type, void *buf, size_t cap, size_t *reply_len);
+int goipc_client_close(goipc_client *c);
+void goipc_client_destroy(goipc_client *c);
 
 #ifdef __cplusplus
 }

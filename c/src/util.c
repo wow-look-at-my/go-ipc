@@ -49,6 +49,7 @@ const char *goipc_strerror(int err)
 	case GOIPC_EINUSE: return "goipc: name is in use";
 	case GOIPC_ENOTCONSUMER: return "goipc: handle is not the receiving end";
 	case GOIPC_ETOOMANYCLAIMS: return "goipc: too many claims in progress";
+	case GOIPC_ECALL: return "goipc: call failed";
 	default: return "goipc: unknown error";
 	}
 }
