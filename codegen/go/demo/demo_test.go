@@ -176,6 +176,17 @@ func TestTypeIDs(t *testing.T) {
 	}
 }
 
+func TestNewMessage(t *testing.T) {
+	for name, m := range messages {
+		got := NewMessage(m.id)
+		require.NotNil(t, got, "NewMessage(%d) for %s", m.id, name)
+		assert.Equal(t, m.id, got.TypeID(), name)
+		assert.Equal(t, reflect.TypeOf(m.make()), reflect.TypeOf(got), name)
+	}
+	assert.Nil(t, NewMessage(0))
+	assert.Nil(t, NewMessage(0xFFFFFFFF))
+}
+
 func TestTooLong(t *testing.T) {
 	if strconv.IntSize < 64 {
 		t.Skip("a 4 GiB field needs a 64-bit int")

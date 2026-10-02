@@ -66,6 +66,24 @@ enc := gob.NewEncoder(conn)
 dec := gob.NewDecoder(conn)
 ```
 
+## Services
+
+`Serve` answers calls from any number of client processes. Each client gets its own channel. A client that exits is reported to the handler, and a client whose service exits gets `ErrPeerGone`. A client that connects before the service exists parks until it starts.
+
+```go
+svc, err := ipc.Serve("policy", ipc.HandlerFunc(func(s *ipc.Session, typ uint32, req []byte) (uint32, []byte, error) {
+    return typ + 1, req, nil
+}))
+defer svc.Close()
+```
+
+```go
+c, err := ipc.Connect(ctx, "policy")
+replyTyp, reply, err := c.Call(ctx, 1, []byte("ping"))
+```
+
+An error a handler returns reaches the client as a `*CallError`. With ipcgen messages, `TypedHandler` and `CallTyped` dispatch on type ID, so neither side touches bytes. Python has `goipc.service.serve` and `connect`, C has `goipc_service_serve` and `goipc_client_call`, and C++ has `goipc::Service` and `goipc::Client`. The protocol is `spec/service.md`.
+
 ## Build a message in place
 
 `Claim` hands back the ring bytes themselves. Build the message where the reader will find it, rather than in a buffer that the send must copy:

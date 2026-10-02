@@ -44,4 +44,13 @@
 "#define SPEC_C2O_SUFFIX \"\(.channel.creator_to_opener_suffix)\"",
 "#define SPEC_O2C_SUFFIX \"\(.channel.opener_to_creator_suffix)\"",
 "#define SPEC_CONN_TYPE_DATA \(.conn.type_data)u",
-"#define SPEC_CONN_TYPE_EOF \(.conn.type_eof)u"
+"#define SPEC_CONN_TYPE_EOF \(.conn.type_eof)u",
+"#define SPEC_SERVICE_REGISTRY_SUFFIX \"\(.service.registry_suffix)\"",
+"#define SPEC_SERVICE_CLIENT_PREFIX \"\(.service.client_prefix)\"",
+"#define SPEC_SERVICE_CLIENT_ID_HEX_DIGITS \(.service.client_id_hex_digits)",
+"#define SPEC_SERVICE_RESERVED_TYPE_MIN UINT32_C(\(.service.reserved_type_min))",
+"#define SPEC_SERVICE_TYPE_KNOCK UINT32_C(\(.service.type_knock))",
+"#define SPEC_SERVICE_TYPE_HELLO UINT32_C(\(.service.type_hello))",
+"#define SPEC_SERVICE_TYPE_ERROR UINT32_C(\(.service.type_error))",
+"#define SPEC_SERVICE_SEQUENCE_SIZE \(.service.sequence_size)u",
+"#define SPEC_SERVICE_FIRST_SEQUENCE \(.service.first_sequence)u"

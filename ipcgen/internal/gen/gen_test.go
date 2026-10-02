@@ -83,6 +83,9 @@ func TestGo(t *testing.T) {
 		"if b[43] > 1 {",
 		"m.N = int8(b[42])",
 		"const EmptyType uint32 = 7",
+		"func (m *Record) TypeID() uint32 { return RecordType }",
+		"type Message interface {\n\tTypeID() uint32\n\tSize() int\n\tMarshalTo(b []byte) int\n\tMarshalBinary() ([]byte, error)\n\tUnmarshalBinary(b []byte) error\n}",
+		"func NewMessage(typeID uint32) Message {\n\tswitch typeID {\n\tcase Vec2Type:\n\t\treturn &Vec2{}\n\tcase RecordType:\n\t\treturn &Record{}\n\tcase TextType:\n\t\treturn &Text{}\n\tcase EmptyType:\n\t\treturn &Empty{}\n\t}\n\treturn nil\n}",
 	} {
 		assert.Contains(t, src, want)
 	}

@@ -7,11 +7,13 @@ directory, then ctypes.util.find_library("goipc").
 
 from __future__ import annotations
 
+from . import service
 from ._endpoints import Channel, Conn, Event, Queue
 from ._lib import LibraryNotFound
 from .errors import (
 	BadLayout,
 	BufferTooSmall,
+	CallError,
 	CallbackError,
 	Closed,
 	Corrupt,
@@ -48,12 +50,12 @@ from .wire import (
 )
 
 __all__ = [
-	"BadLayout", "BufferTooSmall", "CallbackError", "Channel", "Claim", "Closed",
+	"BadLayout", "BufferTooSmall", "CallError", "CallbackError", "Channel", "Claim", "Closed",
 	"Conn", "Corrupt", "Empty", "EndOfStream", "Event", "Full", "InUse",
 	"InvalidArgument", "InvalidCapacity", "InvalidName", "IpcError",
 	"LibraryNotFound", "MessageTooLarge", "NoMemory", "NotConsumer", "PeerGone",
 	"Queue", "ReservedType", "Ring", "SystemCallError", "Timeout",
-	"TooManyClaims", "TooSmall", "Unaligned",
+	"TooManyClaims", "TooSmall", "Unaligned", "service",
 	"CONN_TYPE_DATA", "CONN_TYPE_EOF", "DEFAULT_CAPACITY", "HEADER_SIZE",
 	"MIN_CAPACITY", "RECORD_HEADER_SIZE", "RING_MAGIC", "RING_VERSION",
 	"TYPE_PADDING",
