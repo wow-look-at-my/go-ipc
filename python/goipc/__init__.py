@@ -13,6 +13,7 @@ from ._lib import LibraryNotFound
 from .errors import (
 	BadLayout,
 	BufferTooSmall,
+	CallError,
 	CallbackError,
 	Closed,
 	Corrupt,
@@ -49,7 +50,7 @@ from .wire import (
 )
 
 __all__ = [
-	"BadLayout", "BufferTooSmall", "CallbackError", "Channel", "Claim", "Closed",
+	"BadLayout", "BufferTooSmall", "CallError", "CallbackError", "Channel", "Claim", "Closed",
 	"Conn", "Corrupt", "Empty", "EndOfStream", "Event", "Full", "InUse",
 	"InvalidArgument", "InvalidCapacity", "InvalidName", "IpcError",
 	"LibraryNotFound", "MessageTooLarge", "NoMemory", "NotConsumer", "PeerGone",

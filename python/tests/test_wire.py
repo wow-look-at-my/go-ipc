@@ -121,6 +121,7 @@ class ErrorsTest(unittest.TestCase):
 			"EBUFFER": goipc.BufferTooSmall, "EOF": goipc.EndOfStream,
 			"EPEERGONE": goipc.PeerGone, "EINUSE": goipc.InUse,
 			"ENOTCONSUMER": goipc.NotConsumer, "ETOOMANYCLAIMS": goipc.TooManyClaims,
+			"ECALL": goipc.CallError,
 		}
 		self.assertEqual(text.count("\tGOIPC_E"), len(names), "goipc.h has an error code this table lacks")
 		for suffix, cls in names.items():

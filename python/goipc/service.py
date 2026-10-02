@@ -27,16 +27,12 @@ from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 from . import wire
 from ._endpoints import Channel, Queue
 from ._util import Endpoint
-from .errors import Closed, Corrupt, IpcError, PeerGone, ReservedType
+from .errors import CallError, Closed, Corrupt, IpcError, PeerGone, ReservedType
 
 Handler = Callable[["Session", int, bytes], Tuple[int, bytes]]
 GoneHandler = Callable[["Session"], None]
 
 _SEQ = struct.Struct("<Q")
-
-
-class CallError(IpcError):
-	"""The handler raised, or returned an error. The message is the handler's."""
 
 
 def _registry_name(name: str) -> str:
