@@ -265,7 +265,7 @@ static int role_send_until_gone(const char *name, const char *sender)
 	return status;
 }
 
-enum stop_mode { STOP_CLOSE, STOP_EXIT };
+enum stop_mode { STOP_CLOSE, STOP_EXIT, STOP_RELEASE };
 
 static int parse_mode(const char *s, enum stop_mode *mode)
 {
@@ -273,9 +273,20 @@ static int parse_mode(const char *s, enum stop_mode *mode)
 		*mode = STOP_CLOSE;
 	else if (strcmp(s, "exit") == 0)
 		*mode = STOP_EXIT;
+	else if (strcmp(s, "release") == 0)
+		*mode = STOP_RELEASE;
 	else
-		return fail("mode: %s is neither close nor exit", s);
+		return fail("mode: %s is not close, exit or release", s);
 	return 0;
+}
+
+/* stop_now ends the process with no close. Mode release removes the life socket first. */
+static void stop_now(int status, enum stop_mode mode)
+{
+	int rc;
+	if (mode == STOP_RELEASE && (rc = goipc_release()) != GOIPC_OK && status == 0)
+		status = fail_rc("release", rc);
+	_exit(status);
 }
 
 static int role_recv_then_stop(const char *name, uint64_t count, uint64_t capacity, enum stop_mode mode)
@@ -303,10 +314,10 @@ static int role_recv_then_stop(const char *name, uint64_t count, uint64_t capaci
 	free(buf);
 	if (status == 0 && (printf("ok %" PRIu64 "\n", count) < 0 || fflush(stdout) != 0))
 		status = fail("write ok: %s", strerror(errno));
-	if (mode == STOP_EXIT) {
+	if (mode != STOP_CLOSE) {
 		if ((rc = goipc_queue_unlink(q)) != GOIPC_OK && status == 0)
 			status = fail_rc("unlink", rc);
-		_exit(status);
+		stop_now(status, mode);
 	}
 	if ((rc = goipc_queue_close(q)) != GOIPC_OK && status == 0)
 		status = fail_rc("close", rc);
@@ -367,8 +378,8 @@ static int role_chan_send_then_stop(const char *name, uint64_t count, enum stop_
 		if ((rc = goipc_channel_send(c, (uint32_t)i, payload, (size_t)n, left_ns())) != GOIPC_OK)
 			status = fail_rc("send", rc);
 	}
-	if (mode == STOP_EXIT)
-		_exit(status);
+	if (mode != STOP_CLOSE)
+		stop_now(status, mode);
 	if ((rc = goipc_channel_close(c)) != GOIPC_OK && status == 0)
 		status = fail_rc("close", rc);
 	goipc_channel_destroy(c);
@@ -420,6 +431,9 @@ static int role_listen_echo(const char *name, uint64_t capacity)
 		if (rc != GOIPC_OK)
 			status = fail_rc("write", rc);
 	}
+	/* Close sends end-of-stream only when the ring has room. CloseWrite waits for room. */
+	if (status == 0 && (rc = goipc_conn_close_write(c, left_ns())) != GOIPC_OK)
+		status = fail_rc("close write", rc);
 	if ((rc = goipc_conn_close(c)) != GOIPC_OK && status == 0)
 		status = fail_rc("close", rc);
 	if ((rc = goipc_conn_unlink(c)) != GOIPC_OK && status == 0)

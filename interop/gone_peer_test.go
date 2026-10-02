@@ -18,9 +18,20 @@ func die() {
 }
 
 func checkMode(mode string) error {
-	if mode != "close" && mode != "exit" {
-		return fmt.Errorf("mode %q is neither close nor exit", mode)
+	if mode != "close" && mode != "exit" && mode != "release" {
+		return fmt.Errorf("mode %q is not close, exit or release", mode)
 	}
+	return nil
+}
+
+// stopNow ends the process with no close. Mode release removes the life socket first.
+func stopNow(mode string) error {
+	if mode == "release" {
+		if err := ipc.Release(); err != nil {
+			return fmt.Errorf("release: %w", err)
+		}
+	}
+	die()
 	return nil
 }
 
@@ -73,11 +84,11 @@ func peerRecvThenStop(ctx context.Context, name string, count, capacity int, mod
 	if _, err := fmt.Fprintf(os.Stdout, "ok %d\n", count); err != nil {
 		return err
 	}
-	if mode == "exit" {
+	if mode != "close" {
 		if err := q.Unlink(); err != nil {
 			return err
 		}
-		die()
+		return stopNow(mode)
 	}
 	if err := q.Close(); err != nil {
 		return err
@@ -133,8 +144,8 @@ func peerChanSendThenStop(ctx context.Context, name string, count int, mode stri
 			return fmt.Errorf("send %d: %w", i, err)
 		}
 	}
-	if mode == "exit" {
-		die()
+	if mode != "close" {
+		return stopNow(mode)
 	}
 	return ch.Close()
 }

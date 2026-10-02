@@ -60,6 +60,8 @@ func runChild(role, name, count string) error {
 		return childConsumer(name)
 	case "peer":
 		return childPeer(ctx, name)
+	case "release":
+		return childRelease()
 	case "ident":
 		if _, err := fmt.Println(uint64(selfID())); err != nil {
 			return err

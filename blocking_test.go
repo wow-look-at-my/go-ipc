@@ -45,6 +45,22 @@ func threadCount(t *testing.T) int {
 	return 0
 }
 
+// parked reports whether n waiters count themselves and wait on ev. ev must be
+// the creator's event. On the socket backend a waiter waits once the creator's
+// server holds its connection in the waiting list.
+func parked(count int32, ev *Event, n int) bool {
+	if int(count) != n {
+		return false
+	}
+	sock := ev.impl.sock
+	if sock == nil {
+		return true
+	}
+	sock.srv.mu.Lock()
+	defer sock.srv.mu.Unlock()
+	return len(sock.srv.waiting) == n
+}
+
 // TestBlockedEndpointsConsumeNoCPU is the measurement behind the claim that
 // this package does not busy-wait.
 //
@@ -64,7 +80,7 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 	)
 
 	idle, _ := newTestQueuePair(t, WithCapacity(MinCapacity))
-	_, fullSend := newTestQueuePair(t, WithCapacity(MinCapacity))
+	fullRecv, fullSend := newTestQueuePair(t, WithCapacity(MinCapacity))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -90,8 +106,12 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 		}()
 	}
 
-	// Let every goroutine reach its park before the window opens.
-	runtime.Gosched()
+	// The window measures parked waiters only. The work to reach the park is
+	// outside it: on the socket backend, that is a dial and an accept per waiter.
+	require.Eventually(t, func() bool {
+		return parked(idle.ring.hdr.recvWaiters.Load(), idle.notEmpty, 1) &&
+			parked(fullRecv.ring.hdr.sendWaiters.Load(), fullRecv.notFull, senders)
+	}, 10*time.Second, time.Millisecond, "the waiters did not all park")
 
 	before := cpuTime(t)
 	<-time.After(window)

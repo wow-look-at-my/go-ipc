@@ -10,7 +10,7 @@ import sys
 import threading
 from typing import Any, Callable, Dict, List, NoReturn
 
-from ._endpoints import Channel, Conn, Queue
+from ._endpoints import Channel, Conn, Queue, release
 from .errors import PeerGone
 
 LIMIT_SECONDS = 60.0
@@ -59,9 +59,16 @@ def _exit_at_once() -> NoReturn:
 
 
 def _mode(value: str) -> str:
-	if value not in ("close", "exit"):
-		raise PeerError("mode %r is neither close nor exit" % (value,))
+	if value not in ("close", "exit", "release"):
+		raise PeerError("mode %r is not close, exit or release" % (value,))
 	return value
+
+
+def _stop_now(mode: str) -> NoReturn:
+	"""Exits at once. Mode release removes the life socket first."""
+	if mode == "release":
+		release()
+	_exit_at_once()
 
 
 class _SeqCheck:
@@ -149,10 +156,10 @@ def role_recv_then_stop(args: List[str]) -> None:
 	count, capacity = _ints(args[1:3], ["count", "capacity"])
 	mode = _mode(args[3])
 	q = Queue.create(name, capacity)
-	if mode == "exit":
+	if mode != "close":
 		_recv_checked(q, count)
 		q.unlink()
-		_exit_at_once()
+		_stop_now(mode)
 	try:
 		_recv_checked(q, count)
 	finally:
@@ -202,8 +209,8 @@ def role_chan_send_then_stop(args: List[str]) -> None:
 	c = Channel.open(args[0])
 	for i in range(count):
 		c.send(("0:%d" % i).encode("ascii"), type=i)
-	if mode == "exit":
-		_exit_at_once()
+	if mode != "close":
+		_stop_now(mode)
 	c.close()
 
 
@@ -221,6 +228,8 @@ def role_listen_echo(args: List[str]) -> None:
 			if n == 0:
 				break
 			conn.write(view[:n])
+		# close sends end-of-stream only when the ring has room. close_write waits for room.
+		conn.close_write()
 	finally:
 		try:
 			conn.unlink()

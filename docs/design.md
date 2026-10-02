@@ -111,6 +111,8 @@ Pids, start times and pid namespaces play no part. A container that shares the r
 
 On Unix the socket is bound under a temporary name and renamed into place. A bound socket refuses a dial until it listens, and the sweep removes a socket that refuses, but never one with a temporary name. The sweep removes the life sockets of processes that are gone, along with stale queue names. Windows has no sweep. As a result, a life socket stays in the temporary directory after its process exits.
 
+`Release` removes the socket file of this process, just before it exits. The listener and every accepted connection stay open. A watch that started earlier still ends at the exit. A later check finds no file and judges the process gone, so nothing may send or receive after it. A process that releases leaves no file for the sweep, and on Windows none in the temporary directory.
+
 A host that cannot listen on a Unix socket gives the process a procID without the top bit. Its queues work. No peer judges its liveness, and it judges no peer that lacks the bit either. Its death is not detected.
 
 A process that runs out of free slots takes the slot of a dead owner, once that owner's claim no longer stops the reader. When live claims hold all `ClaimSlots` slots, a claim fails with `ErrTooManyClaims`. A slot is held only while a claim is open. So only a caller that keeps that many `Claim` values open, or that many senders inside the copy at once, reaches the limit.

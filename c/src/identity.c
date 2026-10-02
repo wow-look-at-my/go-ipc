@@ -466,6 +466,25 @@ int goipc__self_errno(void)
 	return err;
 }
 
+int goipc_release(void)
+{
+	pthread_mutex_lock(&life.mu);
+	/* Release never makes a procID. A process with no life socket has nothing to remove. */
+	if (!life.init || life.listen_fd < 0) {
+		pthread_mutex_unlock(&life.mu);
+		return GOIPC_OK;
+	}
+	char *path = goipc__life_path(life.id);
+	pthread_mutex_unlock(&life.mu);
+	if (path == NULL)
+		return GOIPC_ENOMEM;
+	int rc = GOIPC_OK;
+	if (unlink(path) != 0 && errno != ENOENT)
+		rc = goipc__sys();
+	free(path);
+	return rc;
+}
+
 int goipc__on_exit(uint64_t id, goipc_exit_fn fn, void *arg, uint64_t *key)
 {
 	if ((id & GOIPC_PROC_WATCHABLE) == 0)

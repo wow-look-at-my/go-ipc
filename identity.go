@@ -8,8 +8,10 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 )
 
 // A procID names a single process for its whole life. It is random, so no later process reuses it.
@@ -41,6 +43,21 @@ var self struct {
 	once sync.Once
 	id   procID
 	err  error
+	// live is set when the life socket listens. Release reads it so that it never makes a procID.
+	live atomic.Bool
+}
+
+// Release removes the life socket of this process. Call it only before the
+// process exits, after every queue, channel and conn is closed.
+func Release() error {
+	if !self.live.Load() {
+		return nil
+	}
+	err := os.Remove(lifePath(self.id))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // selfID returns the procID of this process, and starts its life socket.
@@ -57,6 +74,7 @@ func selfID() procID {
 			return
 		}
 		self.id = id
+		self.live.Store(true)
 		go serveLife(ln)
 	})
 	return self.id
