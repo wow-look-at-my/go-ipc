@@ -162,9 +162,7 @@ int goipc__ring_try_claim(goipc_ring *r, int slot, uint32_t type, size_t len, go
 		if (to_end < aligned)
 			need = aligned + to_end;
 
-		/* A slow producer can store an old head into head_cache, so
-		 * tail - head_cache can exceed capacity. The unsigned subtraction
-		 * would then wrap and report room that does not exist. */
+		/* A slow producer can store an old head into head_cache, so tail - head_cache can exceed capacity. */
 		uint64_t used = tail - head;
 		if (used > capacity || capacity - used < need) {
 			head = atomic_load(&h->head);
@@ -271,8 +269,7 @@ int goipc__ring_read(goipc_ring *r, int limit, goipc_read_fn fn, void *ctx, size
 			count++;
 		}
 		consumed += step;
-		/* A producer claims before it stores -rec, so every byte outside
-		 * [head, tail) must read as zero or a stale payload looks like a len. */
+		/* A producer claims before it stores -rec. */
 		memset(r->data + index + 4, 0, (size_t)step - 4);
 		atomic_store(len_at(r, index), 0);
 	}

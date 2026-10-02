@@ -73,9 +73,7 @@ func TestBlockedEndpointsConsumeNoCPU(t *testing.T) {
 	const (
 		window  = 300 * time.Millisecond
 		senders = 8
-		// A parked process still wakes for the Go runtime's own timers, so
-		// the budget is not empty. It is far below what even a single
-		// spinning goroutine would reach.
+		// A parked process still wakes for the Go runtime's own timers, so the budget is not empty.
 		budget = window / 10
 	)
 

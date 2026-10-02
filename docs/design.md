@@ -44,13 +44,13 @@ Put a pair of such cursors on one line and every producer claim invalidates the 
 | 384 | `headCache`, `recvWaiters`, `sendWaiters` | both sides |
 | 512 | claim slots: `owner`, `at`, `size` | the producer that owns the slot |
 
-A cursor is 64 bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
+A cursor is many bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
 
 `headCache` lets a producer decide it has room without a read of the consumer's line. A producer refreshes it only when the cached value reports the ring full.
 
 ## Record format
 
-A record is a header of 8 bytes and then its payload. The next record starts at the following 8-byte boundary.
+A record is a header of several bytes and then its payload. The next record starts at the following 8-byte boundary.
 
 ```
  0      4        8
@@ -172,7 +172,7 @@ A waiter reads the FIFO itself, through a handle of its own. It takes that handl
 
 A token is consumed only by a read that returns it. A cancelled wait therefore swallows no wakeup. A signal that arrives before any waiter stays in the pipe until a waiter reads it.
 
-An earlier design put a reader goroutine per event in front of the waiters and handed tokens on over a channel. That code is gone. It cost a pair of goroutine handoffs on every wakeup, measured at about 11 microseconds per round trip on the development machine. It also carried a defect that the current design cannot express. A reader that ran while its own process had no waiter took a wakeup that a waiter in another process needed, and stranded it.
+An earlier design put a reader goroutine per event in front of the waiters and handed tokens on over a channel. That code is gone. It cost a pair of goroutine handoffs on every wakeup, measured at several microseconds per round trip on the development machine. It also carried a defect that the current design cannot express. A reader that ran while its own process had no waiter took a wakeup that a waiter in another process needed, and stranded it.
 
 On Windows an event is a named semaphore. A waiter calls `WaitForMultipleObjects` over that semaphore, a shared close handle, and a cancel handle of its own. This wait does occupy a thread for its duration, which the Unix poller avoids. The Go runtime hands the processor to another thread meanwhile, so other goroutines keep running.
 

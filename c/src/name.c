@@ -1,5 +1,5 @@
-/* Queue names, instances and the sweep of stale names. A name file carries the
- * creator's flock. The .inc file holds the id of the current instance. */
+/* Queue names, instances and the sweep of stale names. A name file carries
+ * the creator's flock. */
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -34,8 +34,7 @@ char *goipc__instance_name(const char *name, const char *inc)
 /* ---- held locks ---- */
 
 /* The fork child gets a copy of every held lock descriptor. Each copy holds
- * the flock until it closes. The child points them at /dev/null, so the lock
- * ends with the process that took it, and the descriptor numbers stay valid. */
+ * the flock until it closes. */
 static struct {
 	pthread_mutex_t mu;
 	pthread_once_t once;

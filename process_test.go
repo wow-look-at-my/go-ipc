@@ -337,8 +337,7 @@ func TestCrossProcessConnEOF(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ping", string(got))
 
-	// Closing this side ends the child's io.Copy, and the child's own Close
-	// then sends the end-of-stream marker back.
+	// Closing this side ends the child's io.Copy, and the child's own Close then sends the end-of-stream marker back.
 	require.NoError(t, conn.Close())
 	require.NoError(t, child.Wait())
 }

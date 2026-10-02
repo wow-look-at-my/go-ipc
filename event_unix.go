@@ -17,22 +17,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// pipeBuf is the largest write a pipe guarantees to deliver atomically. A
-// SignalN above it is truncated rather than torn.
+// pipeBuf is the largest write a pipe guarantees to deliver atomically.
 const pipeBuf = 4096
 
 var signalTokens = make([]byte, pipeBuf)
 
 // eventImpl backs an Event with a FIFO.
-//
-// A FIFO has a name, so a peer opens it with no handshake. The Go runtime
-// polls a FIFO, so a read parks the goroutine and hands back its thread. Every
-// handle is opened read-write: that never blocks on open, and it keeps a
-// writer attached so a reader never sees end-of-file.
-//
-// A waiter reads through a handle of its own, taken from idle. That is what
-// makes a read deadline usable for cancellation: a deadline set on a shared
-// handle would abort every reader of it, not just the thing that cancelled.
 type eventImpl struct {
 	// sock replaces the FIFO on a host that has none. See sockEvent.
 	sock *sockEvent
@@ -40,8 +30,7 @@ type eventImpl struct {
 	path  string
 	write *os.File
 
-	// gone lets signal reject a closed event without the mutex, and without
-	// a guess at which internal error a closed handle reports.
+	// gone lets signal reject a closed event without the mutex, and without a guess.
 	gone atomic.Bool
 
 	mu     sync.Mutex
@@ -51,8 +40,7 @@ type eventImpl struct {
 }
 
 // A reader is a handle a single waiter reads through, plus the cancel
-// function for it. The function is built with the handle so that a wait
-// hands context.AfterFunc an existing value rather than a fresh closure.
+// function for it.
 type reader struct {
 	f      *os.File
 	cancel func()
@@ -163,9 +151,7 @@ func (e *eventImpl) acquire() (*reader, error) {
 
 // releaseReader returns a handle for the next waiter to use.
 func (e *eventImpl) releaseReader(r *reader) {
-	// A cancellation that fired late can leave a deadline in the past. The
-	// reset here keeps the next waiter from an immediate spurious return,
-	// and its own retry covers the case where both race.
+	// A cancellation that fired late can leave a deadline in the past.
 	r.f.SetReadDeadline(time.Time{})
 
 	e.mu.Lock()
@@ -209,8 +195,7 @@ func (e *eventImpl) signal(n int) error {
 		if errors.Is(werr, syscall.EAGAIN) || errors.Is(werr, syscall.EWOULDBLOCK) {
 			werr = nil
 		}
-		// Reporting completion unconditionally keeps this call off the
-		// poller: a signaller must never wait for a waiter.
+		// Reporting completion unconditionally keeps this call off the poller: a signaller must never wait for a waiter.
 		return true
 	})
 	if cerr != nil {
@@ -256,13 +241,10 @@ func (e *eventImpl) wait(ctx context.Context) error {
 			if cerr := ctx.Err(); cerr != nil {
 				return cerr
 			}
-			// A deadline with no live cancellation behind it came from an
-			// earlier waiter whose cancellation landed after it let go.
+			// A deadline with no live cancellation behind it came from an earlier waiter whose cancellation landed.
 			r.f.SetReadDeadline(time.Time{})
 		case errors.Is(rerr, os.ErrClosed), e.gone.Load():
-			// Close aborts an in-flight read by closing the handle under
-			// it. The flag covers the same case without a guess at which
-			// internal error the runtime reports for it.
+			// Close aborts an in-flight read by closing the handle under it.
 			return ErrClosed
 		default:
 			return rerr

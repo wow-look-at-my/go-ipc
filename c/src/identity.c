@@ -1,7 +1,4 @@
-/* The procID of this process and its life socket. A watch on a process is a
- * connection to its life socket, which the kernel ends when that process
- * exits. One thread per process parks in poll() over the listener, the
- * accepted connections and every watch. */
+/* The procID of this process and its life socket. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -41,8 +38,7 @@ static struct {
 	uint64_t id;
 	int err;
 	int listen_fd;
-	/* listen_paused drops the listener from the poll set after accept ran out
-	 * of descriptors, so a pending connection cannot make poll() spin. */
+	/* listen_paused drops the listener from the poll set after accept ran out of descriptors. */
 	bool listen_paused;
 	int wake_r, wake_w;
 	int *conns;
@@ -326,10 +322,8 @@ static void *life_thread(void *arg)
 		if (n > 1) {
 			if (pfds[1].revents != 0)
 				accept_all();
-			/* Only this thread changes conns, and accept_all appends,
-			 * so the first nconns entries still match the poll set.
-			 * The walk runs backward because close_conn moves the last
-			 * entry into the freed place. */
+			/* Only this thread changes conns, and accept_all appends, so the first
+			 * nconns entries still match the poll set. */
 			for (size_t i = nconns; i-- > 0;) {
 				int err;
 				if (pfds[2 + i].revents != 0 && drained(life.conns[i], &err))
@@ -347,9 +341,7 @@ static void *life_thread(void *arg)
 	return NULL;
 }
 
-/* The child of a fork is another process. It must not keep this process's
- * listener or connections open, or this process would look alive after it
- * exits. The child builds an identity of its own on first use. */
+/* The child of a fork is another process. */
 static void atfork_prepare(void)
 {
 	pthread_mutex_lock(&life.mu);

@@ -95,8 +95,7 @@ char *goipc__join(const char *a, const char *b, const char *c);
 char *goipc__segment_path(const char *name);
 char *goipc__event_path(const char *name);
 
-/* goipc__deadline turns a relative timeout into an absolute CLOCK_MONOTONIC
- * time. It returns NULL for a negative timeout, which means no deadline. */
+/* goipc__deadline turns a relative timeout into an absolute CLOCK_MONOTONIC time. */
 const struct timespec *goipc__deadline(int64_t timeout_ns, struct timespec *out);
 /* */
 void goipc__remaining(const struct timespec *deadline, struct timespec *out);
@@ -118,16 +117,12 @@ bool goipc__gate_close(struct goipc_gate *g);
 void goipc__gate_drain(struct goipc_gate *g);
 bool goipc__gate_closed(struct goipc_gate *g);
 
-/* goipc__ring_read is goipc_ring_read with a payload limit. It stops before a
- * record whose payload exceeds maxlen and returns GOIPC_EBUFFER, with the
- * payload size in *need. That record stays queued. */
+/* goipc__ring_read is goipc_ring_read with a payload limit. */
 int goipc__ring_read(goipc_ring *r, int limit, goipc_read_fn fn, void *ctx, size_t maxlen, size_t *need, uint32_t *need_type);
 
-/* goipc__ring_init is goipc_ring_init with the consumer recorded before the
- * magic, so a peer never attaches to a ring without its reader. */
+/* goipc__ring_init is goipc_ring_init with the consumer recorded before the magic. */
 int goipc__ring_init(goipc_ring *r, void *buf, size_t len, uint64_t consumer);
-/* goipc__ring_try_claim records the claim range in slot before the tail
- * swap. */
+/* goipc__ring_try_claim records the claim range in slot before the tail swap. */
 int goipc__ring_try_claim(goipc_ring *r, int slot, uint32_t type, size_t len, goipc_claim *out);
 
 /* A stall is a claim that stops the reader at head. slots lists every slot
@@ -140,11 +135,9 @@ struct goipc_stall {
 };
 
 bool goipc__ring_stalled(goipc_ring *r, struct goipc_stall *st);
-/* goipc__ring_reclaim pads the stalled claim up to end. It returns false
- * when the claim changed under the reader. */
+/* goipc__ring_reclaim pads the stalled claim up to end. It returns false when the claim changed under the reader. */
 bool goipc__ring_reclaim(goipc_ring *r, const struct goipc_stall *st, uint64_t end, const int *dead, int ndead);
-/* goipc__ring_acquire_slot takes a free slot for self, or the slot of a dead
- * owner whose claim the reader has passed. dead reports a dead owner. */
+/* goipc__ring_acquire_slot takes a free slot for self. */
 int goipc__ring_acquire_slot(goipc_ring *r, uint64_t self, bool (*dead)(void *ctx, uint64_t id), void *ctx, int *slot);
 void goipc__ring_drop_slot(goipc_ring *r, uint64_t self, int slot);
 
@@ -165,26 +158,20 @@ int goipc__queue_wake_receiver(goipc_queue *q);
 
 /* ---- identity.c: the procID and the life socket ---- */
 
-/* goipc__self_id returns the procID of this process. The first call starts
- * the life socket. A process without one gets an id without the watchable
- * bit. */
+/* goipc__self_id returns the procID of this process. The first call starts the life socket. */
 uint64_t goipc__self_id(void);
 /* */
 int goipc__self_errno(void);
 /* goipc__life_path returns a malloc copy of the life socket path of id. */
 char *goipc__life_path(uint64_t id);
-/* goipc__is_dead reports a process that has exited. A process that cannot be
- * checked counts as alive. */
+/* goipc__is_dead reports a process that has exited. A process that cannot be checked counts as alive. */
 bool goipc__is_dead(uint64_t id);
 
-/* It runs under the registry lock, so it must not call into the registry or
- * block. */
+/* It runs under the registry lock, so it must not call into the registry or block. */
 typedef void (*goipc_exit_fn)(void *arg, uint64_t id, int err);
-/* goipc__on_exit registers fn and returns its key in *key. It returns
- * GOIPC_EPEERGONE and registers nothing when the process is already gone. */
+/* goipc__on_exit registers fn and returns its key in *key. */
 int goipc__on_exit(uint64_t id, goipc_exit_fn fn, void *arg, uint64_t *key);
-/* goipc__cancel_exit removes a registration. After it returns, the function
- * of key is not running and does not run. */
+/* goipc__cancel_exit removes a registration. After it returns, the function of key is not running and does not run. */
 void goipc__cancel_exit(uint64_t key);
 
 /* ---- name.c: names, instances and the sweep ---- */
@@ -193,8 +180,7 @@ char *goipc__name_path(const char *name);
 char *goipc__inc_path(const char *name);
 /* goipc__instance_name returns a malloc copy of "<name>.<inc>". */
 char *goipc__instance_name(const char *name, const char *inc);
-/* goipc__lock_name takes the flock on the name file and returns its fd, or
- * returns GOIPC_EINUSE while a live process holds it. */
+/* goipc__lock_name takes the flock on the name file and returns its fd. */
 int goipc__lock_name(const char *name, int *fd);
 void goipc__release_name(int fd);
 /* */

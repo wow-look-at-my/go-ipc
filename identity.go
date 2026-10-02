@@ -61,10 +61,6 @@ func Release() error {
 }
 
 // selfID returns the procID of this process, and starts its life socket.
-//
-// A host that has no Unix sockets still gets a procID, without the watchable
-// bit. The queues of that process work. Its peers do not detect its death,
-// and it reports why through selfErr.
 func selfID() procID {
 	self.once.Do(func() {
 		id := randomID()
