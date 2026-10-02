@@ -9,7 +9,9 @@ UNITTEST_ARGS ?=
 OUTPUT_SYNC ?= target
 
 ROOT := $(abspath $(CURDIR)/..)
-export PYTHONPATH := $(CURDIR)$(if $(PYTHONPATH),:$(PYTHONPATH))
+# The typed peer roles import the ipcgen module demo from here.
+GEN_DIR ?= $(ROOT)/build/gen
+export PYTHONPATH := $(CURDIR):$(GEN_DIR)/py$(if $(PYTHONPATH),:$(PYTHONPATH))
 export GOIPC_SPEC_DIR ?= $(ROOT)/spec
 
 ifeq ($(findstring jobserver,$(MAKEFLAGS)),)

@@ -82,7 +82,7 @@ TEST(peer_recv_and_send_roles, T_FORK)
 	CHECK(strcmp(line, "ok 3000\n") == 0, "recv printed %s", line);
 	REQUIRE(finish(&r) == 0, "recv failed");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "recv left %s behind", path);
 }
 
@@ -100,7 +100,7 @@ TEST(peer_listen_echo_and_dial_check_roles, T_FORK)
 	CHECK(finish(&d) == 0, "dial-check failed");
 	CHECK(finish(&l) == 0, "listen-echo failed");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s.c2o", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.c2o.name", name);
 	CHECK(!path_exists(path), "listen-echo left %s behind", path);
 }
 
@@ -121,7 +121,7 @@ TEST(peer_typed_send_and_recv_roles, T_FORK)
 	CHECK(strncmp(line, "ok ", 3) == 0 && atoi(line + 3) > 0, "typed-recv printed %s", line);
 	REQUIRE(finish(&r) == 0, "typed-recv failed");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "typed-recv left %s behind", path);
 }
 
@@ -141,8 +141,76 @@ TEST(peer_typed_recv_rejects_a_wrong_type, T_FORK)
 	CHECK(finish(&s) == 0, "send failed");
 	CHECK(finish(&r) == 1, "typed-recv accepted a record of type 0");
 	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-shm-%s", name);
+	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "typed-recv left %s behind", path);
+}
+
+static int run(const char *const argv[])
+{
+	struct proc p = spawn(argv);
+	return finish(&p);
+}
+
+/* The recover cell of spec/peer.md: dead claims, the second across the wrap point. */
+TEST(peer_recover_cell, T_FORK)
+{
+	char name[96], line[64];
+	unique_name(name, sizeof name, "peerr");
+	const char *recv_args[] = {"goipc-peer", "recv", name, "400", "4096", NULL};
+	struct proc r = spawn(recv_args);
+	read_output(&r, line, sizeof line, true);
+	REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+	const char *die64[] = {"goipc-peer", "claim-and-die", name, "64", NULL};
+	const char *send0[] = {"goipc-peer", "send", name, "0", "200", NULL};
+	const char *die1500[] = {"goipc-peer", "claim-and-die", name, "1500", NULL};
+	const char *send1[] = {"goipc-peer", "send", name, "1", "200", NULL};
+	CHECK(run(die64) == 0, "claim-and-die 64 failed");
+	CHECK(run(send0) == 0, "send 0 failed");
+	CHECK(run(die1500) == 0, "claim-and-die 1500 failed");
+	CHECK(run(send1) == 0, "send 1 failed");
+	read_output(&r, line, sizeof line, false);
+	CHECK(strcmp(line, "ok 400\n") == 0, "recv printed %s", line);
+	CHECK(finish(&r) == 0, "recv failed");
+}
+
+TEST(peer_receiver_gone_cell, T_FORK)
+{
+	const char *modes[] = {"close", "exit"};
+	for (int m = 0; m < 2; m++) {
+		char name[96], line[64];
+		unique_name(name, sizeof name, "peerg");
+		const char *recv_args[] = {"goipc-peer", "recv-then-stop", name, "200", "4096", modes[m], NULL};
+		struct proc r = spawn(recv_args);
+		read_output(&r, line, sizeof line, true);
+		REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+		const char *send_args[] = {"goipc-peer", "send-until-gone", name, "0", NULL};
+		struct proc s = spawn(send_args);
+		read_output(&r, line, sizeof line, false);
+		CHECK(strcmp(line, "ok 200\n") == 0, "%s: recv-then-stop printed %s", modes[m], line);
+		CHECK(finish(&r) == 0, "%s: recv-then-stop failed", modes[m]);
+		read_output(&s, line, sizeof line, false);
+		unsigned long n = 0;
+		CHECK(sscanf(line, "gone %lu", &n) == 1 && n >= 200, "%s: send-until-gone printed %s", modes[m], line);
+		CHECK(finish(&s) == 0, "%s: send-until-gone failed", modes[m]);
+	}
+}
+
+TEST(peer_channel_peer_gone_cell, T_FORK)
+{
+	const char *modes[] = {"close", "exit"};
+	for (int m = 0; m < 2; m++) {
+		char name[96], line[64];
+		unique_name(name, sizeof name, "peerh");
+		const char *recv_args[] = {"goipc-peer", "chan-recv-until-gone", name, "4096", "200", NULL};
+		struct proc r = spawn(recv_args);
+		read_output(&r, line, sizeof line, true);
+		REQUIRE(strcmp(line, "ready\n") == 0, "first line %s", line);
+		const char *send_args[] = {"goipc-peer", "chan-send-then-stop", name, "200", modes[m], NULL};
+		CHECK(run(send_args) == 0, "%s: chan-send-then-stop failed", modes[m]);
+		read_output(&r, line, sizeof line, false);
+		CHECK(strcmp(line, "ok 200\n") == 0, "%s: chan-recv-until-gone printed %s", modes[m], line);
+		CHECK(finish(&r) == 0, "%s: chan-recv-until-gone failed", modes[m]);
+	}
 }
 
 TEST(peer_fails_on_bad_usage, T_FORK)

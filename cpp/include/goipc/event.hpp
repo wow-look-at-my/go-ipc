@@ -5,7 +5,9 @@
 #include <cerrno>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
+#include <vector>
 #include <string_view>
 #include <utility>
 
@@ -135,19 +137,32 @@ public:
 	}
 
 	// wait consumes one token.
-	bool wait(timeout t = forever) { return wait_until(detail::deadline(t)); }
+	bool wait(timeout t = forever) { return wait_until(detail::deadline(t)) == wake::token; }
 
-	bool wait_until(const detail::deadline &d)
+	// wake says why wait_until returned.
+	enum class wake {
+		token,
+		timed_out,
+		// One of the watch descriptors became ready. No token was consumed.
+		watch,
+	};
+
+	// wait_until consumes one token, or returns when the deadline passes or
+	// one of watch turns readable. A watch descriptor is a connection to the
+	// life socket of a process this wait depends on.
+	wake wait_until(const detail::deadline &d, std::span<const int> watch = {})
 	{
 		if (!s_)
 			throw error(errc::closed, "goipc: event is closed");
 		detail::gate_guard in(s_->g);
-		pollfd fds[2] = {{s_->close_fd, POLLIN, 0}, {s_->fifo, POLLIN, 0}};
+		std::vector<pollfd> fds = {{s_->close_fd, POLLIN, 0}, {s_->fifo, POLLIN, 0}};
+		for (int fd : watch)
+			fds.push_back({fd, POLLIN, 0});
 		for (;;) {
 			timespec ts{};
 			if (d.finite())
 				ts = d.remaining();
-			int r = ::ppoll(fds, 2, d.finite() ? &ts : nullptr, nullptr);
+			int r = ::ppoll(fds.data(), fds.size(), d.finite() ? &ts : nullptr, nullptr);
 			if (r < 0) {
 				if (errno == EINTR)
 					continue;
@@ -156,13 +171,16 @@ public:
 			if (fds[0].revents)
 				throw error(errc::closed, "goipc: event is closed");
 			if (r == 0)
-				return false;
+				return wake::timed_out;
+			for (std::size_t i = 2; i < fds.size(); i++)
+				if (fds[i].revents)
+					return wake::watch;
 			if (fds[1].revents & (POLLERR | POLLNVAL))
 				throw error(errc::invalid, "goipc: poll reported an error on " + s_->path);
 			char b;
 			ssize_t n = ::read(s_->fifo, &b, 1);
 			if (n == 1)
-				return true;
+				return wake::token;
 			if (n == 0)
 				throw error(errc::invalid, "goipc: unexpected end of file on " + s_->path);
 			// EAGAIN: another waiter took the token, so block again.

@@ -31,6 +31,7 @@
 #define GOIPC_INC_SUFFIX ".inc"
 #define GOIPC_LIFE_PREFIX "go-ipc-life-"
 #define GOIPC_LIFE_SUFFIX ".sock"
+#define GOIPC_LIFE_TEMP_SUFFIX ".tmp"
 /* An instance id is this many lowercase hex digits. */
 #define GOIPC_INC_LEN 16
 

@@ -23,6 +23,10 @@ ENOMEM = -14
 EINVAL = -15
 EBUFFER = -16
 EOF = -17
+EPEERGONE = -18
+EINUSE = -19
+ENOTCONSUMER = -20
+ETOOMANYCLAIMS = -21
 
 
 class IpcError(Exception):
@@ -104,6 +108,30 @@ class EndOfStream(IpcError, EOFError):
 	code = EOF
 
 
+class PeerGone(IpcError, ConnectionError):
+	"""The process at the other end exited or closed its end."""
+
+	code = EPEERGONE
+
+
+class InUse(IpcError):
+	"""A live process holds the name, or a channel already has its peer."""
+
+	code = EINUSE
+
+
+class NotConsumer(IpcError):
+	"""A receive ran on a handle that does not own the receiving end."""
+
+	code = ENOTCONSUMER
+
+
+class TooManyClaims(IpcError):
+	"""Live claims hold every claim slot of the ring."""
+
+	code = ETOOMANYCLAIMS
+
+
 class CallbackError(IpcError):
 	"""A read callback raised. The C reader had already consumed later records.
 
@@ -120,6 +148,7 @@ _BY_CODE: Dict[int, Type[IpcError]] = {
 		Closed, Full, Empty, MessageTooLarge, ReservedType, InvalidName,
 		InvalidCapacity, TooSmall, BadLayout, Corrupt, Unaligned, Timeout,
 		SystemCallError, NoMemory, InvalidArgument, BufferTooSmall, EndOfStream,
+		PeerGone, InUse, NotConsumer, TooManyClaims,
 	)
 }
 

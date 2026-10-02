@@ -6,6 +6,8 @@
 #include "detail.hpp"
 #include "error.hpp"
 #include "event.hpp"
+#include "identity.hpp"
+#include "names.hpp"
 #include "queue.hpp"
 #include "ring.hpp"
 

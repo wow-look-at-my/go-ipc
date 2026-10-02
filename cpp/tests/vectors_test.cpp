@@ -60,10 +60,11 @@ errc expected_error(std::string_view name)
 
 // write_error runs a write that the manifest expects to fail, and returns the
 // error it reports. A full ring is not an exception in this API.
-errc write_error(goipc::Ring &ring, std::uint32_t type, std::span<const std::byte> p)
+errc write_error(goipc::Ring &ring, int slot, std::uint32_t type, std::span<const std::byte> p)
 {
 	try {
-		if (!ring.try_write(type, p))
+		bool ok = slot < 0 ? ring.try_write(type, p) : ring.try_write(slot, type, p);
+		if (!ok)
 			return errc::full;
 	} catch (const goipc::error &e) {
 		return e.value();
@@ -87,7 +88,7 @@ TEST(Vectors, ReplayMatchesImage)
 	for (const auto &c : spec::ring_cases) {
 		SCOPED_TRACE(std::string(c.name));
 		testutil::aligned_buffer buf(c.buffer_size);
-		auto ring = goipc::Ring::init(buf.span());
+		auto ring = goipc::Ring::init(buf.span(), c.consumer);
 		// Claims left open must stay open until the image is compared.
 		std::vector<goipc::Claim> open_claims;
 
@@ -95,12 +96,17 @@ TEST(Vectors, ReplayMatchesImage)
 			auto p = payload(op.payload, op.repeat);
 			if (!op.error.empty()) {
 				std::vector<std::byte> before(buf.data(), buf.data() + buf.size());
-				EXPECT_EQ(write_error(ring, op.type, p), expected_error(op.error));
+				EXPECT_EQ(write_error(ring, op.slot, op.type, p), expected_error(op.error));
 				EXPECT_EQ(0, std::memcmp(before.data(), buf.data(), buf.size())) << "a failed op changed the ring";
 			} else if (op.op == "write") {
-				ASSERT_TRUE(ring.try_write(op.type, p));
+				ASSERT_TRUE(op.slot < 0 ? ring.try_write(op.type, p) : ring.try_write(op.slot, op.type, p));
+			} else if (op.op == "acquire") {
+				int got = ring.acquire_slot(op.owner, [](std::uint64_t) { return false; });
+				ASSERT_EQ(got, op.slot);
+			} else if (op.op == "drop") {
+				ring.drop_slot(op.owner, op.slot);
 			} else if (op.op == "claim") {
-				auto claim = ring.try_claim(op.type, p.size());
+				auto claim = op.slot < 0 ? ring.try_claim(op.type, p.size()) : ring.try_claim(op.slot, op.type, p.size());
 				ASSERT_TRUE(claim.has_value());
 				std::memcpy(claim->bytes().data(), p.data(), p.size());
 				if (op.then == "commit")
@@ -136,6 +142,7 @@ TEST(Vectors, AttachReadsExpectedRecords)
 
 		auto ring = goipc::Ring::attach(buf.span());
 		EXPECT_EQ(0, std::memcmp(buf.data(), image.data(), image.size())) << "attach wrote to the buffer";
+		EXPECT_EQ(ring.consumer(), c.consumer);
 		EXPECT_EQ(ring.head(), c.head);
 		EXPECT_EQ(ring.tail(), c.tail);
 

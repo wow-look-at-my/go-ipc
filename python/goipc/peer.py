@@ -8,9 +8,10 @@ import json
 import os
 import sys
 import threading
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, NoReturn
 
-from ._endpoints import Conn, Queue
+from ._endpoints import Channel, Conn, Queue
+from .errors import PeerGone
 
 LIMIT_SECONDS = 60.0
 
@@ -45,37 +46,68 @@ def pattern(n: int) -> bytes:
 	return (cycle * (n // 256 + 1))[:n]
 
 
+def _print(line: str) -> None:
+	sys.stdout.write(line + "\n")
+	sys.stdout.flush()
+
+
+def _exit_at_once() -> NoReturn:
+	"""Exits with status 0 and runs no exit handler, finalizer or close, as _exit(0) does."""
+	sys.stdout.flush()
+	sys.stderr.flush()
+	os._exit(0)
+
+
+def _mode(value: str) -> str:
+	if value not in ("close", "exit"):
+		raise PeerError("mode %r is neither close nor exit" % (value,))
+	return value
+
+
+class _SeqCheck:
+	"""Checks <sender>:<seq> payloads as the recv role does."""
+
+	def __init__(self) -> None:
+		self.next_seq: Dict[str, int] = {}
+
+	def check(self, type_: int, payload: bytes) -> None:
+		try:
+			text = payload.decode("ascii")
+		except UnicodeDecodeError:
+			raise PeerError("payload %r is not ASCII" % (payload,))
+		sender, sep, seq_text = text.rpartition(":")
+		if not sep or not seq_text.isdigit():
+			raise PeerError("payload %r is not <sender>:<seq>" % (text,))
+		seq = int(seq_text)
+		if type_ != seq:
+			raise PeerError("payload %r has type %d, want %d" % (text, type_, seq))
+		want = self.next_seq.get(sender, 0)
+		if seq != want:
+			raise PeerError("sender %r sent seq %d, want %d" % (sender, seq, want))
+		self.next_seq[sender] = want + 1
+
+
 def role_recv(args: List[str]) -> None:
 	_arity(args, "<name> <total> <capacity>")
 	name = args[0]
 	total, capacity = _ints(args[1:], ["total", "capacity"])
 	q = Queue.create(name, capacity)
 	try:
-		_ready()
-		next_seq: Dict[str, int] = {}
-		for _ in range(total):
-			type_, payload = q.recv()
-			try:
-				text = payload.decode("ascii")
-			except UnicodeDecodeError:
-				raise PeerError("payload %r is not ASCII" % (payload,))
-			sender, sep, seq_text = text.rpartition(":")
-			if not sep or not seq_text.isdigit():
-				raise PeerError("payload %r is not <sender>:<seq>" % (text,))
-			seq = int(seq_text)
-			if type_ != seq:
-				raise PeerError("payload %r has type %d, want %d" % (text, type_, seq))
-			want = next_seq.get(sender, 0)
-			if seq != want:
-				raise PeerError("sender %r sent seq %d, want %d" % (sender, seq, want))
-			next_seq[sender] = want + 1
-		sys.stdout.write("ok %d\n" % total)
-		sys.stdout.flush()
+		_recv_checked(q, total)
 	finally:
 		try:
 			q.unlink()
 		finally:
 			q.close()
+
+
+def _recv_checked(q: Queue, count: int) -> None:
+	"""Prints ready, receives count checked messages, then prints ok <count>."""
+	_ready()
+	seq = _SeqCheck()
+	for _ in range(count):
+		seq.check(*q.recv())
+	_print("ok %d" % count)
 
 
 def role_send(args: List[str]) -> None:
@@ -85,6 +117,94 @@ def role_send(args: List[str]) -> None:
 	with Queue.open(name) as q:
 		for i in range(count):
 			q.send(("%s:%d" % (sender, i)).encode("ascii"), type=i)
+
+
+def role_claim_and_die(args: List[str]) -> None:
+	_arity(args, "<name> <length>")
+	(length,) = _ints(args[1:], ["length"])
+	q = Queue.open(args[0])
+	c = q.claim(1, length)
+	if length:
+		c.buffer[:] = b"\xab" * length
+	_exit_at_once()
+
+
+def role_send_until_gone(args: List[str]) -> None:
+	_arity(args, "<name> <sender>")
+	name, sender = args[0], args[1]
+	with Queue.open(name) as q:
+		sent = 0
+		while True:
+			try:
+				q.send(("%s:%d" % (sender, sent)).encode("ascii"), type=sent)
+			except PeerGone:
+				break
+			sent += 1
+		_print("gone %d" % sent)
+
+
+def role_recv_then_stop(args: List[str]) -> None:
+	_arity(args, "<name> <count> <capacity> <mode>")
+	name = args[0]
+	count, capacity = _ints(args[1:3], ["count", "capacity"])
+	mode = _mode(args[3])
+	q = Queue.create(name, capacity)
+	if mode == "exit":
+		_recv_checked(q, count)
+		q.unlink()
+		_exit_at_once()
+	try:
+		_recv_checked(q, count)
+	finally:
+		try:
+			q.close()
+		finally:
+			q.unlink()
+
+
+def role_chan_recv_until_gone(args: List[str]) -> None:
+	_arity(args, "<name> <capacity> <count>")
+	name = args[0]
+	capacity, count = _ints(args[1:], ["capacity", "count"])
+	c = Channel.create(name, capacity)
+	try:
+		_ready()
+		got = 0
+		while True:
+			try:
+				type_, payload = c.recv()
+			except PeerGone:
+				break
+			want = ("0:%d" % got).encode("ascii")
+			if type_ != got or payload != want:
+				raise PeerError("message %d: type %d payload %r, want type %d payload %r" % (got, type_, payload, got, want))
+			got += 1
+		if got != count:
+			raise PeerError("received %d messages before peer-gone, want %d" % (got, count))
+		try:
+			c.send(b"x")
+		except PeerGone:
+			pass
+		else:
+			raise PeerError("a send after the peer went succeeded, want peer-gone")
+		_print("ok %d" % count)
+	finally:
+		try:
+			c.close()
+		finally:
+			c.unlink()
+
+
+def role_chan_send_then_stop(args: List[str]) -> None:
+	_arity(args, "<name> <count> <mode>")
+	(count,) = _ints(args[1:2], ["count"])
+	mode = _mode(args[2])
+	c = Channel.open(args[0])
+	for i in range(count):
+		c.send(("0:%d" % i).encode("ascii"), type=i)
+	if mode == "exit":
+		_exit_at_once()
+	c.close()
 
 
 def role_listen_echo(args: List[str]) -> None:
@@ -236,6 +356,11 @@ ROLES: Dict[str, Callable[[List[str]], None]] = {
 	"dial-check": role_dial_check,
 	"typed-send": role_typed_send,
 	"typed-recv": role_typed_recv,
+	"claim-and-die": role_claim_and_die,
+	"send-until-gone": role_send_until_gone,
+	"recv-then-stop": role_recv_then_stop,
+	"chan-recv-until-gone": role_chan_recv_until_gone,
+	"chan-send-then-stop": role_chan_send_then_stop,
 }
 
 

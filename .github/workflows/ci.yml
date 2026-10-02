@@ -30,16 +30,16 @@ jobs:
       GOIPC_PEER_CPP: ${{ github.workspace }}/cpp/build/goipc-peer
       GOIPC_PEER_PY: python3 -m goipc.peer
       PYTHONPATH: ${{ github.workspace }}/python:${{ github.workspace }}/build/gen/py
-      GOIPC_INTEROP_LANGS: ${{ runner.os == 'Linux' && 'go,c,cpp,py' || 'go' }}
+      GOIPC_INTEROP_LANGS: ${{ matrix.os == 'ubuntu-latest' && 'go,c,cpp,py' || 'go' }}
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      # Every language's generated code comes from ipcgen, so it builds first.
-      - uses: wow-look-at-my/go-toolchain@master
+      # The C, C++ and Python generated code comes from ipcgen, so it builds first. The Go modules generate their own code with go:generate on every host.
+      - if: runner.os == 'Linux'
+        uses: wow-look-at-my/go-toolchain@master
         with:
           working-directory: ipcgen
-          autorelease: false
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtest-dev jq
       - if: runner.os == 'Linux'
@@ -48,10 +48,4 @@ jobs:
         run: make -C python interpreters
       - if: runner.os == 'Linux'
         run: make native
-      - if: runner.os != 'Linux'
-        shell: bash
-        run: |
-          mkdir -p codegen/go/demo interop/internal/demo
-          ipcgen/build/ipcgen --lang go --out codegen/go/demo/demo.go spec/vectors/schema/example.ipc
-          cp codegen/go/demo/demo.go interop/internal/demo/demo.go
       - uses: wow-look-at-my/go-toolchain@master

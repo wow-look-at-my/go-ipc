@@ -42,7 +42,7 @@ Put a pair of such cursors on one line and every producer claim invalidates the 
 | 128 | `tail` | producers, by compare-and-swap |
 | 256 | `head` | the consumer |
 | 384 | `headCache`, `recvWaiters`, `sendWaiters` | both sides |
-| 512 | claim slots: `owner`, `ns`, `at`, `size` | the producer that owns the slot |
+| 512 | claim slots: `owner`, `at`, `size` | the producer that owns the slot |
 
 A cursor is 64 bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
 

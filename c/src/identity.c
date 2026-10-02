@@ -141,7 +141,7 @@ static int random_u64(uint64_t *out)
 static int listen_life(uint64_t id, int *out)
 {
 	char *path = goipc__life_path(id);
-	char *tmp = path == NULL ? NULL : goipc__join(path, ".tmp", "");
+	char *tmp = path == NULL ? NULL : goipc__join(path, GOIPC_LIFE_TEMP_SUFFIX, "");
 	struct sockaddr_un addr;
 	int fd = -1, err = 0;
 	if (tmp == NULL) {
