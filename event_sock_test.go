@@ -51,6 +51,27 @@ func TestSockEventSignalBeforeWait(t *testing.T) {
 	require.NoError(t, creator.Wait(testContext(t)))
 }
 
+// An open FIFO handle keeps working after the creator unlinks the name. A new
+// waiter there must not need the path.
+func TestFIFOEventWaitsAfterUnlink(t *testing.T) {
+	if sockHost() {
+		t.Skip("the socket backend dials the path for every wait, so an unlinked event takes no new waiter")
+	}
+	name := uniqueName(t)
+	creator, err := CreateEvent(name)
+	require.NoError(t, err)
+	defer creator.Close()
+	opener, err := OpenEvent(name)
+	require.NoError(t, err)
+	defer opener.Close()
+	require.NoError(t, creator.Unlink())
+
+	result := make(chan error, 1)
+	go func() { result <- opener.Wait(testContext(t)) }()
+	require.NoError(t, creator.Signal())
+	require.NoError(t, <-result)
+}
+
 func TestSockEventOpenRejectsMissingName(t *testing.T) {
 	useSockEvents(t)
 	_, err := OpenEvent(uniqueName(t))

@@ -116,6 +116,32 @@ func openFIFO(path string) (*os.File, error) {
 	return f, nil
 }
 
+// dupFIFO gives a waiter a descriptor of its own on the FIFO. It duplicates
+// the write handle and does not open the path, because the creator can unlink
+// the path while this process still waits on the FIFO.
+func (e *eventImpl) dupFIFO() (*os.File, error) {
+	rc, err := e.write.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	fd := -1
+	var derr error
+	if cerr := rc.Control(func(w uintptr) {
+		fd, derr = unix.FcntlInt(w, unix.F_DUPFD_CLOEXEC, 0)
+	}); cerr != nil {
+		return nil, cerr
+	}
+	if derr != nil {
+		return nil, &os.PathError{Op: "dup", Path: e.path, Err: derr}
+	}
+	f := os.NewFile(uintptr(fd), e.path)
+	if err := f.SetReadDeadline(time.Time{}); err != nil {
+		f.Close()
+		return nil, errors.Join(ErrNotPollable, fmt.Errorf("%s: %w", e.path, err))
+	}
+	return f, nil
+}
+
 // acquire hands out a reader, and opens a handle when none is idle. The pool
 // therefore grows to the peak number of waiters this process ever had.
 func (e *eventImpl) acquire() (*reader, error) {
@@ -132,7 +158,7 @@ func (e *eventImpl) acquire() (*reader, error) {
 	}
 	e.mu.Unlock()
 
-	f, err := openFIFO(e.path)
+	f, err := e.dupFIFO()
 	if err != nil {
 		return nil, err
 	}
