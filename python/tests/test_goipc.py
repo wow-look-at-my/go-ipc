@@ -316,6 +316,15 @@ class QueueTest(Named):
 		with self.assertRaises(goipc.Empty):
 			q.try_recv()
 
+	def test_files_live_in_the_runtime_dir(self) -> None:
+		q = self.queue("qd")
+		d = goipc.runtime_dir()
+		self.assertTrue(os.path.isabs(d) and not d.endswith("/"), d)
+		if os.path.isdir("/dev/shm"):
+			self.assertEqual(d, goipc.wire.RUNTIME_DIR)
+		path = support.host_path(goipc.wire.NAME_FILE_PATH.format(name=q.name))
+		self.assertTrue(os.path.isfile(path), path)
+
 	def test_open_shares_the_ring(self) -> None:
 		q = self.queue("qo")
 		sender = goipc.Queue.open(q.name)
@@ -581,7 +590,7 @@ class PeerTest(Named):
 
 	def test_not_ready_name(self) -> None:
 		name = support.unique_name("nr")
-		path = goipc.wire.NAME_FILE_PATH.format(name=name)
+		path = support.host_path(goipc.wire.NAME_FILE_PATH.format(name=name))
 		# The lock stands for a create in progress and keeps a sweep off the file.
 		fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
 		self.addCleanup(os.unlink, path)

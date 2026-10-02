@@ -15,6 +15,16 @@ from .wire import DEFAULT_CAPACITY
 _RecvCall = Callable[[Any, int, Any, Any], int]
 
 
+def runtime_dir() -> str:
+	"""Returns the directory that holds every file of the library.
+
+	It is /dev/shm on Linux and the temporary directory on macOS. The paths in
+	wire are the spec's Linux spellings; a path on this host is the spec's
+	with its directory replaced by this one.
+	"""
+	return lib().goipc_runtime_dir().decode("utf-8")
+
+
 class _Handle(_util.Endpoint):
 	"""Owns a C handle: destroy on collection, close that tolerates a repeat."""
 
