@@ -97,6 +97,9 @@ func isDead(id procID) bool {
 	if !id.watchable() {
 		return false
 	}
+	if _, gone := exited.Load(id); gone {
+		return true
+	}
 	conn, err := net.Dial("unix", lifePath(id))
 	if err == nil {
 		conn.Close()
@@ -150,6 +153,9 @@ type watch struct {
 	fns     map[uint64]func(error)
 	stopped bool
 }
+
+// exited holds each process a watch saw exit.
+var exited sync.Map
 
 var watches struct {
 	mu   sync.Mutex
@@ -218,6 +224,9 @@ func (w *watch) run(id procID) {
 
 	if err != nil && isDead(id) {
 		err = nil
+	}
+	if err == nil {
+		exited.Store(id, struct{}{})
 	}
 	for _, fn := range fns {
 		fn(err)
