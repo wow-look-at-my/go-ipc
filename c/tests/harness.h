@@ -61,6 +61,9 @@ void harness_abort_test(void) __attribute__((noreturn));
 
 /* unique_name fills buf with a name no other test or run uses. */
 void unique_name(char *buf, size_t len, const char *what);
+/* runtime_file fills buf with the path of a file named by fmt under
+ * goipc_runtime_dir(). */
+void runtime_file(char *buf, size_t len, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 bool path_exists(const char *path);
 int64_t now_ns(void);
 /* aligned_buffer returns zeroed memory on an 8-byte boundary. */

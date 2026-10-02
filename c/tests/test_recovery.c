@@ -608,12 +608,12 @@ TEST(sweep_removes_name_of_dead_creator, T_FORK)
 		REQUIRE(path_exists(paths[i]), "%s is missing", paths[i]);
 
 	/* A live holder keeps everything. */
-	goipc__sweep_dir(GOIPC_SHM_DIR);
+	goipc__sweep_dir(goipc_runtime_dir());
 	for (int i = 0; i < 6; i++)
 		CHECK(path_exists(paths[i]), "the sweep removed %s of a live process", paths[i]);
 
 	release_child(pid, hold);
-	goipc__sweep_dir(GOIPC_SHM_DIR);
+	goipc__sweep_dir(goipc_runtime_dir());
 	for (int i = 0; i < 6; i++) {
 		CHECK(!path_exists(paths[i]), "the sweep left %s", paths[i]);
 		free(paths[i]);
@@ -665,7 +665,7 @@ static int fake_process(uint64_t *id)
 	REQUIRE(strlen(path) < sizeof addr.sun_path);
 	strcpy(addr.sun_path, path);
 	free(path);
-	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int fd = goipc__socket(false);
 	REQUIRE(fd >= 0);
 	REQUIRE(bind(fd, (struct sockaddr *)&addr, sizeof addr) == 0 && listen(fd, 16) == 0);
 	return fd;

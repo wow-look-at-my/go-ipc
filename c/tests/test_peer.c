@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,7 +20,8 @@ struct proc {
 static struct proc spawn_fd(const char *const argv[], int target)
 {
 	int fds[2];
-	REQUIRE(pipe2(fds, O_CLOEXEC) == 0);
+	REQUIRE(pipe(fds) == 0);
+	REQUIRE(fcntl(fds[0], F_SETFD, FD_CLOEXEC) == 0 && fcntl(fds[1], F_SETFD, FD_CLOEXEC) == 0);
 	pid_t pid = fork();
 	REQUIRE(pid >= 0);
 	if (pid == 0) {
@@ -81,8 +83,8 @@ TEST(peer_recv_and_send_roles, T_FORK)
 	read_output(&r, line, sizeof line, false);
 	CHECK(strcmp(line, "ok 3000\n") == 0, "recv printed %s", line);
 	REQUIRE(finish(&r) == 0, "recv failed");
-	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
+	char path[PATH_MAX];
+	runtime_file(path, sizeof path, "go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "recv left %s behind", path);
 }
 
@@ -99,8 +101,8 @@ TEST(peer_listen_echo_and_dial_check_roles, T_FORK)
 	struct proc d = spawn(dial_args);
 	CHECK(finish(&d) == 0, "dial-check failed");
 	CHECK(finish(&l) == 0, "listen-echo failed");
-	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.c2o.name", name);
+	char path[PATH_MAX];
+	runtime_file(path, sizeof path, "go-ipc-%s.c2o.name", name);
 	CHECK(!path_exists(path), "listen-echo left %s behind", path);
 }
 
@@ -120,8 +122,8 @@ TEST(peer_typed_send_and_recv_roles, T_FORK)
 	read_output(&r, line, sizeof line, false);
 	CHECK(strncmp(line, "ok ", 3) == 0 && atoi(line + 3) > 0, "typed-recv printed %s", line);
 	REQUIRE(finish(&r) == 0, "typed-recv failed");
-	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
+	char path[PATH_MAX];
+	runtime_file(path, sizeof path, "go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "typed-recv left %s behind", path);
 }
 
@@ -140,8 +142,8 @@ TEST(peer_typed_recv_rejects_a_wrong_type, T_FORK)
 	struct proc s = spawn(send_args);
 	CHECK(finish(&s) == 0, "send failed");
 	CHECK(finish(&r) == 1, "typed-recv accepted a record of type 0");
-	char path[160];
-	snprintf(path, sizeof path, "/dev/shm/go-ipc-%s.name", name);
+	char path[PATH_MAX];
+	runtime_file(path, sizeof path, "go-ipc-%s.name", name);
 	CHECK(!path_exists(path), "typed-recv left %s behind", path);
 }
 

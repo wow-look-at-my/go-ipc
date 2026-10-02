@@ -1,5 +1,6 @@
 /* Conformance against spec/wire.json and spec/vectors/ring. */
 #define _GNU_SOURCE
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,7 +46,9 @@ TEST(wire_constants_match_spec, 0)
 	REQUIRE(GOIPC_PROC_WATCHABLE == UINT64_C(1) << SPEC_PROC_WATCHABLE_BIT);
 	REQUIRE(GOIPC_PROC_ANY == UINT64_C(1) << SPEC_PROC_ALWAYS_SET_BIT);
 	REQUIRE(GOIPC_INC_LEN == SPEC_INSTANCE_ID_HEX_DIGITS);
-	REQUIRE(strcmp(GOIPC_SHM_DIR, SPEC_RUNTIME_DIR) == 0);
+#ifdef __linux__
+	REQUIRE(strcmp(goipc_runtime_dir(), SPEC_RUNTIME_DIR) == 0);
+#endif
 }
 
 TEST(claim_slot_offsets_match_spec, 0)
@@ -103,10 +106,15 @@ static void expand(char *out, size_t len, const char *pattern, const char *const
 	out[o < len ? o : len - 1] = '\0';
 }
 
+/* check_path expands a path pattern of wire.json on this host. The spec names
+ * the Linux runtime directory, so that part becomes goipc_runtime_dir(). */
 static void check_path(char *got, const char *pattern, const char *const kv[][2], size_t n, const char *what)
 {
-	char want[256];
-	expand(want, sizeof want, pattern, kv, n);
+	const char *prefix = SPEC_RUNTIME_DIR "/";
+	REQUIRE(strncmp(pattern, prefix, strlen(prefix)) == 0, "%s is not under %s", pattern, SPEC_RUNTIME_DIR);
+	char rest[256], want[PATH_MAX];
+	expand(rest, sizeof rest, pattern + strlen(prefix), kv, n);
+	snprintf(want, sizeof want, "%s/%s", goipc_runtime_dir(), rest);
 	CHECK(got != NULL && strcmp(got, want) == 0, "%s path %s, spec %s", what, got, want);
 	free(got);
 }
