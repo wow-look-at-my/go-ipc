@@ -66,6 +66,11 @@ const char *goipc_strerror(int err);
 /* goipc_last_errno returns the errno of the latest GOIPC_ESYS on this thread. */
 int goipc_last_errno(void);
 
+/* goipc_runtime_dir returns the directory that holds every file of this
+ * library: /dev/shm on Linux, and $TMPDIR (or /tmp) on macOS. The string is
+ * static and never changes within a process. */
+const char *goipc_runtime_dir(void);
+
 /* ---- Ring: a lock-free MPSC ring over a caller buffer ---- */
 
 typedef struct goipc_ring {

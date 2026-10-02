@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
-#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -18,12 +17,12 @@
 
 char *goipc__name_path(const char *name)
 {
-	return goipc__join(GOIPC_SHM_DIR "/" GOIPC_NAME_PREFIX, name, GOIPC_NAME_SUFFIX);
+	return goipc__runtime_path(GOIPC_NAME_PREFIX, name, GOIPC_NAME_SUFFIX);
 }
 
 char *goipc__inc_path(const char *name)
 {
-	return goipc__join(GOIPC_SHM_DIR "/" GOIPC_NAME_PREFIX, name, GOIPC_INC_SUFFIX);
+	return goipc__runtime_path(GOIPC_NAME_PREFIX, name, GOIPC_INC_SUFFIX);
 }
 
 char *goipc__instance_name(const char *name, const char *inc)
@@ -62,7 +61,7 @@ static void held_child(void)
 	if (null < 0)
 		return;
 	for (size_t i = 0; i < held.n; i++)
-		dup3(null, held.fds[i], O_CLOEXEC);
+		goipc__dup_cloexec(null, held.fds[i]);
 	close(null);
 	held.n = 0;
 }
@@ -209,16 +208,9 @@ void goipc__previous_inc(const char *name, char *inc)
 int goipc__new_inc(char *inc)
 {
 	uint8_t raw[GOIPC_INC_LEN / 2];
-	size_t have = 0;
-	while (have < sizeof raw) {
-		ssize_t n = getrandom(raw + have, sizeof raw - have, 0);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			return goipc__sys();
-		}
-		have += (size_t)n;
-	}
+	int err = goipc__random(raw, sizeof raw);
+	if (err != 0)
+		return goipc__sys_errno(err);
 	static const char digits[] = "0123456789abcdef";
 	for (size_t i = 0; i < sizeof raw; i++) {
 		inc[2 * i] = digits[raw[i] >> 4];
@@ -340,7 +332,7 @@ static void sweep_life(const char *path)
 	if (strlen(path) >= sizeof addr.sun_path)
 		return;
 	strcpy(addr.sun_path, path);
-	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int fd = goipc__socket(false);
 	if (fd < 0)
 		return;
 	if (connect(fd, (struct sockaddr *)&addr, sizeof addr) != 0 && errno == ECONNREFUSED)
@@ -415,7 +407,7 @@ static pthread_once_t sweep_once = PTHREAD_ONCE_INIT;
 
 static void sweep_runtime_dir(void)
 {
-	goipc__sweep_dir(GOIPC_SHM_DIR);
+	goipc__sweep_dir(goipc_runtime_dir());
 }
 
 void goipc__sweep(void)

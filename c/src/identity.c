@@ -10,7 +10,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -60,7 +59,7 @@ char *goipc__life_path(uint64_t id)
 {
 	char hex[17];
 	snprintf(hex, sizeof hex, "%016llx", (unsigned long long)id);
-	return goipc__join(GOIPC_SHM_DIR "/" GOIPC_LIFE_PREFIX, hex, GOIPC_LIFE_SUFFIX);
+	return goipc__runtime_path(GOIPC_LIFE_PREFIX, hex, GOIPC_LIFE_SUFFIX);
 }
 
 static bool fill_addr(struct sockaddr_un *addr, const char *path)
@@ -91,7 +90,7 @@ static enum dial_result dial(uint64_t id, int *fd_out, int *err)
 		*err = ENAMETOOLONG;
 		return DIAL_ERR;
 	}
-	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int fd = goipc__socket(false);
 	if (fd < 0) {
 		*err = errno;
 		return DIAL_ERR;
@@ -119,22 +118,6 @@ bool goipc__is_dead(uint64_t id)
 	return dial(id, NULL, &err) == DIAL_GONE;
 }
 
-static int random_u64(uint64_t *out)
-{
-	uint8_t *p = (uint8_t *)out;
-	size_t have = 0;
-	while (have < sizeof *out) {
-		ssize_t n = getrandom(p + have, sizeof *out - have, 0);
-		if (n < 0) {
-			if (errno == EINTR)
-				continue;
-			return errno;
-		}
-		have += (size_t)n;
-	}
-	return 0;
-}
-
 /* listen_life binds under a temporary name and renames into place. A bound
  * socket refuses a dial until it listens, and the sweep removes a socket
  * that refuses, but never one with a temporary name. */
@@ -152,7 +135,7 @@ static int listen_life(uint64_t id, int *out)
 		err = ENAMETOOLONG;
 		goto out;
 	}
-	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+	fd = goipc__socket(true);
 	if (fd < 0) {
 		err = errno;
 		goto out;
@@ -194,7 +177,7 @@ static void close_conn(size_t i)
 static void accept_all(void)
 {
 	for (;;) {
-		int fd = accept4(life.listen_fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+		int fd = goipc__accept(life.listen_fd);
 		if (fd < 0) {
 			if (errno == EINTR || errno == ECONNABORTED)
 				continue;
@@ -414,16 +397,15 @@ static void init_locked(void)
 		life.atfork = true;
 	}
 	uint64_t id = 0;
-	int err = random_u64(&id);
+	int err = goipc__random(&id, sizeof id);
 	id |= GOIPC_PROC_WATCHABLE | GOIPC_PROC_ANY;
 	int fd = -1;
 	if (err == 0)
 		err = listen_life(id, &fd);
 	if (err == 0) {
 		int p[2];
-		if (pipe2(p, O_CLOEXEC | O_NONBLOCK) != 0) {
-			err = errno;
-		} else {
+		err = goipc__pipe(p);
+		if (err == 0) {
 			life.wake_r = p[0];
 			life.wake_w = p[1];
 			life.listen_fd = fd;

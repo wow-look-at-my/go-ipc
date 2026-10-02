@@ -78,12 +78,12 @@ char *goipc__join(const char *a, const char *b, const char *c)
 
 char *goipc__segment_path(const char *name)
 {
-	return goipc__join(GOIPC_SHM_DIR "/" GOIPC_SEGMENT_PREFIX, name, "");
+	return goipc__runtime_path(GOIPC_SEGMENT_PREFIX, name, "");
 }
 
 char *goipc__event_path(const char *name)
 {
-	return goipc__join(GOIPC_SHM_DIR "/" GOIPC_EVENT_PREFIX, name, GOIPC_EVENT_SUFFIX);
+	return goipc__runtime_path(GOIPC_EVENT_PREFIX, name, GOIPC_EVENT_SUFFIX);
 }
 
 const struct timespec *goipc__deadline(int64_t timeout_ns, struct timespec *out)

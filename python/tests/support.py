@@ -14,6 +14,8 @@ import time
 import unittest
 from typing import Any, Callable, List, Optional
 
+import goipc
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PYTHON_DIR = os.path.dirname(HERE)
 
@@ -45,6 +47,14 @@ def spec_file(*parts: str) -> bytes:
 def unique_name(label: str) -> str:
 	"""Returns a name no other test, process or interpreter version uses."""
 	return "pytest-%d-%d-%s" % (os.getpid(), next(_counter), label)
+
+
+def host_path(spec_path: str) -> str:
+	"""Puts a path of the spec, which names the Linux runtime directory, under this host's."""
+	prefix = goipc.wire.RUNTIME_DIR + "/"
+	if not spec_path.startswith(prefix):
+		raise ValueError("%r is not under %r" % (spec_path, goipc.wire.RUNTIME_DIR))
+	return os.path.join(goipc.runtime_dir(), spec_path[len(prefix):])
 
 
 class Worker(threading.Thread):

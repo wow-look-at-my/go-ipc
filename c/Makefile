@@ -3,6 +3,16 @@ CC ?= cc
 AR ?= ar
 JQ ?= jq
 
+# SAN_CC compiles the sanitizer builds. Apple's clang ships no leak detector,
+# so on macOS they use the clang of Homebrew's llvm.
+ifeq ($(shell uname -s),Darwin)
+SAN_CC ?= $(shell brew --prefix llvm)/bin/clang
+NO_ASLR :=
+else
+SAN_CC ?= $(CC)
+NO_ASLR := setarch $(shell uname -m) -R
+endif
+
 ROOT := $(abspath .)
 SPEC := $(abspath ../spec)
 B := $(ROOT)/build
@@ -56,11 +66,11 @@ $(B)/obj/tests/%.o: tests/%.c $(HEADERS)
 
 $(B)/asan/%.o: %.c $(HEADERS)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(ASAN_FLAGS) -c $< -o $@
+	$(SAN_CC) $(CPPFLAGS) $(ASAN_FLAGS) -c $< -o $@
 
 $(B)/tsan/%.o: %.c $(HEADERS)
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(TSAN_FLAGS) -c $< -o $@
+	$(SAN_CC) $(CPPFLAGS) $(TSAN_FLAGS) -c $< -o $@
 
 $(B)/libgoipc.so: $(LIB_OBJ)
 	$(CC) -shared -pthread -o $@ $^
@@ -94,16 +104,16 @@ $(B)/tests: $(TEST_OBJ) $(LIB_OBJ)
 	$(CC) -pthread -o $@ $^ -ldl
 
 $(B)/tests-asan: $(ASAN_OBJ)
-	$(CC) -pthread -fsanitize=address,undefined -o $@ $^ -ldl
+	$(SAN_CC) -pthread -fsanitize=address,undefined -o $@ $^ -ldl
 
 $(B)/tests-tsan: $(TSAN_OBJ)
-	$(CC) -pthread -fsanitize=thread -o $@ $^ -ldl
+	$(SAN_CC) -pthread -fsanitize=thread -o $@ $^ -ldl
 
-# The ThreadSanitizer run covers the threaded tests; it cannot follow fork.
+# The ThreadSanitizer run covers the threaded tests; it cannot follow fork. On Linux it runs with address space layout randomization off.
 test: build $(B)/tests $(B)/tests-asan $(B)/tests-tsan $(GEN)/vectors.txt
 	$(B)/tests
 	ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 $(B)/tests-asan
-	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 setarch $$(uname -m) -R $(B)/tests-tsan --threads-only
+	TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 $(NO_ASLR) $(B)/tests-tsan --threads-only
 
 clean:
 	rm -rf $(B)

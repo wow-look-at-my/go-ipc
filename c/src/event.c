@@ -45,8 +45,9 @@ static int open_event(char *path, goipc_event **out)
 		return GOIPC_EINVAL;
 	}
 	int pipefd[2];
-	if (pipe2(pipefd, O_CLOEXEC | O_NONBLOCK) != 0) {
-		int rc = goipc__sys();
+	int err = goipc__pipe(pipefd);
+	if (err != 0) {
+		int rc = goipc__sys_errno(err);
 		close(fd);
 		free(path);
 		return rc;
@@ -140,10 +141,7 @@ static int wait_locked(goipc_event *e, const struct timespec *deadline)
 			{.fd = e->fd, .events = POLLIN},
 			{.fd = e->close_r, .events = POLLIN},
 		};
-		struct timespec left;
-		if (deadline != NULL)
-			goipc__remaining(deadline, &left);
-		int n = ppoll(pfd, 2, deadline != NULL ? &left : NULL, NULL);
+		int n = goipc__poll(pfd, 2, deadline);
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;

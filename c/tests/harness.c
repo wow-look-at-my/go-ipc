@@ -2,6 +2,7 @@
 #include "harness.h"
 
 #include <glob.h>
+#include <limits.h>
 #include <pthread.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -73,6 +74,17 @@ void unique_name(char *buf, size_t len, const char *what)
 	snprintf(buf, len, "goipc-ctest-%d-%s-%d", (int)getpid(), what, atomic_fetch_add(&name_seq, 1));
 }
 
+void runtime_file(char *buf, size_t len, const char *fmt, ...)
+{
+	int n = snprintf(buf, len, "%s/", goipc_runtime_dir());
+	if (n < 0 || (size_t)n >= len)
+		return;
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf + n, len - (size_t)n, fmt, ap);
+	va_end(ap);
+}
+
 bool path_exists(const char *path)
 {
 	struct stat st;
@@ -99,8 +111,8 @@ void *aligned_buffer(size_t len)
  * created. */
 static void remove_leftovers(void)
 {
-	char pattern[128];
-	snprintf(pattern, sizeof pattern, "/dev/shm/go-*goipc-ctest-%d-*", (int)getpid());
+	char pattern[PATH_MAX];
+	snprintf(pattern, sizeof pattern, "%s/go-*goipc-ctest-%d-*", goipc_runtime_dir(), (int)getpid());
 	glob_t g;
 	if (glob(pattern, 0, NULL, &g) != 0)
 		return;

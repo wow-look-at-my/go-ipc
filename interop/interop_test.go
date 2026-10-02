@@ -98,8 +98,18 @@ func peerCommand(t *testing.T, lang string) ([]string, []string) {
 
 var nameCounter atomic.Uint64
 
+// runtimeDir is the directory every peer keeps its files in: /dev/shm on a
+// host that has it, and the temporary directory otherwise, as on macOS.
+func runtimeDir() string {
+	if info, err := os.Stat("/dev/shm"); err == nil && info.IsDir() {
+		return "/dev/shm"
+	}
+	return os.TempDir()
+}
+
 // endpointName returns a name no other cell or concurrent run uses. The
-// t.Cleanup it registers removes every file of the name from /dev/shm.
+// t.Cleanup it registers removes every file of the name from the runtime
+// directory.
 func endpointName(t *testing.T, kind string) string {
 	t.Helper()
 	name := fmt.Sprintf("interop-%s-%d-%d", kind, os.Getpid(), nameCounter.Add(1))
@@ -117,7 +127,7 @@ func shmFiles(t *testing.T, name string) []string {
 	t.Helper()
 	var out []string
 	for _, p := range []string{"go-shm-" + name, "go-shm-" + name + ".*", "go-ipc-" + name + ".*"} {
-		m, err := filepath.Glob(filepath.Join("/dev/shm", p))
+		m, err := filepath.Glob(filepath.Join(runtimeDir(), p))
 		require.NoError(t, err)
 		out = append(out, m...)
 	}

@@ -157,7 +157,7 @@ The schema language is in `spec/schema.md`.
 
 The Go package runs on Linux, macOS and Windows, and CI runs its suite on all three. An event uses a FIFO on Unix, which the Go runtime polls. It uses a named semaphore on Windows. Exit detection uses a Unix socket per process, on all three. Windows has no sweep, so those sockets stay in the temporary directory after their processes exit.
 
-The C, C++ and Python implementations and the cross-language suite run on Linux.
+The C and Python implementations run on Linux and macOS, and the cross-language suite covers them on both. The files live in `/dev/shm` on Linux and in `$TMPDIR` on macOS. `goipc_runtime_dir()` and `goipc.runtime_dir()` say which. The sanitizer builds of the C suite use Homebrew's `llvm` on macOS, because Apple's clang has no leak detector. The C++ implementation runs on Linux.
 
 ## Documentation
 
