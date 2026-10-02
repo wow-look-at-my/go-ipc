@@ -90,7 +90,7 @@ Only the handle `CreateQueue` returns may receive. Any other handle gets `ErrNot
 
 A producer that dies between its claim and its commit leaves a record the reader cannot pass. Each queue claim therefore names its producer.
 
-A process takes a claim slot for each claim it has open, from a pool it keeps. Before the compare-and-swap on `tail`, the producer writes the range it is about to claim into its slot: `at` is the cursor, `size` is the claim. It clears `at` after the commit. The slot's `owner` is the procID of the process.
+A process takes a claim slot for each claim it has open, from a pool it keeps. Before the compare-and-swap on `tail`, the producer writes the range of its claim into its slot. `at` is the cursor, and `size` is the claim. It clears `at` after the commit. The slot's `owner` is the procID of the process.
 
 A reader that stops at a record that is not committed looks for the slots whose range covers its cursor. The true producer is always among them. A live producer's intent stays in place from before its compare-and-swap until after its commit. The reader saw `tail` move, so it also sees that intent.
 
@@ -192,7 +192,7 @@ A claim is the exception that the API cannot police. It points into the mapping.
 
 A producer that dies holding a claim is covered in "Claim slots and dead producers". A reader or a channel peer that dies is covered in "Peers".
 
-A corrupt length makes `Read` return `ErrCorrupt` rather than a slice out of bounds. A length is corrupt when it runs past the committed cursor, runs past the end of the data region, or is too small to hold a header.
+A corrupt length makes `Read` return `ErrCorrupt` rather than a slice out of bounds. A length is corrupt when it runs past the committed cursor or past the end of the data region. A length too small to hold a header is corrupt too.
 
 A plain queue has no peer. Its receiver waits for new senders for as long as it runs. A context is the way to bound that wait.
 
