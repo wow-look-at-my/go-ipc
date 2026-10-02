@@ -60,6 +60,8 @@ func runChild(role, name, count string) error {
 		return childConsumer(name)
 	case "peer":
 		return childPeer(ctx, name)
+	case "service-client":
+		return childServiceClient(ctx, name)
 	case "ident":
 		if _, err := fmt.Println(uint64(selfID())); err != nil {
 			return err
@@ -145,6 +147,23 @@ func childPeer(ctx context.Context, name string) error {
 		return err
 	}
 	if err := ch.Send(ctx, []byte("hello")); err != nil {
+		return err
+	}
+	if err := readyThenWait(); err != nil {
+		return err
+	}
+	os.Exit(0)
+	return nil
+}
+
+// childServiceClient connects to a service, makes one call, and waits. When
+// its stdin closes it exits without a Close.
+func childServiceClient(ctx context.Context, name string) error {
+	c, err := Connect(ctx, name, WithCapacity(MinCapacity))
+	if err != nil {
+		return err
+	}
+	if _, _, err := c.Call(ctx, testEcho, []byte("hi")); err != nil {
 		return err
 	}
 	if err := readyThenWait(); err != nil {
