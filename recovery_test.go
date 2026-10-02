@@ -526,6 +526,33 @@ func TestOnExitReportsChildExit(t *testing.T) {
 	assert.True(t, isDead(id))
 }
 
+// The life connection can end while the listener still accepts. The process
+// counts as dead from the moment its watch sees the end.
+func TestDeadOnceWatchSawExit(t *testing.T) {
+	id := randomID()
+	ln, err := listenLife(id)
+	require.NoError(t, err)
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	require.False(t, isDead(id))
+
+	exited := make(chan error, 1)
+	cancel, err := onExit(id, func(err error) { exited <- err })
+	require.NoError(t, err)
+	defer cancel()
+
+	require.NoError(t, <-exited)
+	assert.True(t, isDead(id))
+}
+
 func TestOnExitCancelStopsTheCall(t *testing.T) {
 	cmd, id, _ := startIdent(t)
 
