@@ -118,12 +118,14 @@ type Service struct {
 	reg     *Queue
 	ctx     context.Context
 	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	next    int
-	mu      sync.Mutex
-	err     error
-	done    chan struct{}
-	closing sync.Once
+	// knocks ends when the goroutine that reads the queue has returned.
+	knocks chan struct{}
+
+	mu       sync.Mutex
+	next     int
+	sessions map[*Session]bool
+	err      error
+	closing  sync.Once
 }
 
 // Serve creates the service and returns once a client can reach it. It
@@ -142,12 +144,15 @@ func Serve(name string, handler Handler, opts ...Option) (*Service, error) {
 		return nil, fmt.Errorf("ipc: serve %q: %w", name, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Service{name: name, handler: handler, reg: reg, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	s := &Service{
+		name: name, handler: handler, reg: reg, ctx: ctx, cancel: cancel,
+		knocks:   make(chan struct{}),
+		sessions: make(map[*Session]bool),
+	}
 	// The queue is published, so a client whose channel the scan misses opens the queue and knocks.
 	for _, id := range scanClients(name) {
 		s.adopt(id)
 	}
-	s.wg.Add(1)
 	go s.run()
 	return s, nil
 }
@@ -157,7 +162,7 @@ func (s *Service) Name() string { return s.name }
 
 // run adopts each client that knocks until the queue closes.
 func (s *Service) run() {
-	defer s.wg.Done()
+	defer close(s.knocks)
 	buf := make([]byte, serviceClientIDs)
 	for {
 		typ, payload, err := s.reg.RecvInto(s.ctx, buf)
@@ -195,36 +200,43 @@ func (s *Service) adopt(id string) {
 	s.mu.Lock()
 	sess := &Session{ordinal: s.next, id: id, ch: ch}
 	s.next++
+	s.sessions[sess] = true
 	s.mu.Unlock()
 	var hello [serviceSeqSize]byte
 	binary.LittleEndian.PutUint64(hello[:], uint64(sess.ordinal))
 	if err := ch.SendTyped(s.ctx, typeServiceHello, hello[:]); err != nil {
-		ch.Close()
+		s.forget(sess)
 		return
 	}
-	s.wg.Add(1)
 	go s.serve(sess)
 }
 
-// serve answers one client until it goes or the service closes.
+// forget closes a session's channel and drops it from the service.
+func (s *Service) forget(sess *Session) {
+	s.mu.Lock()
+	delete(s.sessions, sess)
+	s.mu.Unlock()
+	sess.ch.Close()
+}
+
+// serve answers one client until it goes or the service closes. A client
+// that went has its channel removed before the handler hears of it.
 func (s *Service) serve(sess *Session) {
-	defer s.wg.Done()
+	defer s.forget(sess)
 	ch := sess.ch
 	buf := make([]byte, ch.MaxMessageSize())
 	for {
 		typ, msg, err := ch.RecvInto(s.ctx, buf)
 		if errors.Is(err, ErrPeerGone) {
-			s.handler.Gone(sess)
 			ch.Close()
 			ch.Unlink()
+			s.handler.Gone(sess)
 			return
 		}
 		if err != nil {
-			ch.Close()
 			return
 		}
 		if err := s.answer(sess, typ, msg); err != nil {
-			ch.Close()
 			return
 		}
 	}
@@ -262,17 +274,26 @@ func frame(seq uint64, payload []byte) []byte {
 }
 
 // Close stops the service. Every client parked in a call finds the service
-// gone. It then removes the service's name.
+// gone. It then removes the service's name. A handler that is still running
+// is not waited for; its reply fails when it returns.
 func (s *Service) Close() error {
 	var err error
 	s.closing.Do(func() {
 		s.cancel()
 		err = s.reg.Close()
-		s.wg.Wait()
+		<-s.knocks
+		s.mu.Lock()
+		sessions := make([]*Session, 0, len(s.sessions))
+		for sess := range s.sessions {
+			sessions = append(sessions, sess)
+		}
+		s.mu.Unlock()
+		for _, sess := range sessions {
+			sess.ch.Close()
+		}
 		if uerr := s.reg.Unlink(); err == nil {
 			err = uerr
 		}
-		close(s.done)
 	})
 	return err
 }
