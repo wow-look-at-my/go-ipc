@@ -379,8 +379,11 @@ func TestRingManyProducers(t *testing.T) {
 				return
 			}
 			seen += n
+			if n != 0 {
+				continue
+			}
 			// After the producers finish, a read that delivers nothing means a record is lost or stuck uncommitted.
-			if n == 0 && finished {
+			if finished {
 				fail("stalled after %d of %d messages, empty=%v", seen, total, r.Empty())
 				return
 			}
