@@ -351,6 +351,13 @@ func TestRingManyProducers(t *testing.T) {
 	go func() {
 		defer close(done)
 		for seen < total {
+			// The producers must be seen done BEFORE the read. Then every record is committed and visible to it.
+			finished := false
+			select {
+			case <-producersDone:
+				finished = true
+			default:
+			}
 			n, err := r.Read(64, func(typ uint32, payload []byte) {
 				var id, i int
 				if _, serr := fmt.Sscanf(string(payload), "%d:%d", &id, &i); serr != nil {
@@ -372,15 +379,10 @@ func TestRingManyProducers(t *testing.T) {
 				return
 			}
 			seen += n
-			// Every producer finished and the ring drained, so no further
-			// message can arrive. Report the shortfall instead of hanging.
-			if n == 0 && r.Empty() {
-				select {
-				case <-producersDone:
-					fail("stalled after %d of %d messages", seen, total)
-					return
-				default:
-				}
+			// After the producers finish, a read that delivers nothing means a record is lost or stuck uncommitted.
+			if n == 0 && finished {
+				fail("stalled after %d of %d messages, empty=%v", seen, total, r.Empty())
+				return
 			}
 		}
 	}()
