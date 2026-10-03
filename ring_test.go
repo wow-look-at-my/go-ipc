@@ -372,15 +372,17 @@ func TestRingManyProducers(t *testing.T) {
 				return
 			}
 			seen += n
-			// Every producer finished and the ring drained, so no further
-			// message can arrive. Report the shortfall instead of hanging.
-			if n == 0 && r.Empty() {
-				select {
-				case <-producersDone:
+			if n != 0 {
+				continue
+			}
+			// Check producersDone before Empty.
+			select {
+			case <-producersDone:
+				if r.Empty() {
 					fail("stalled after %d of %d messages", seen, total)
 					return
-				default:
 				}
+			default:
 			}
 		}
 	}()
