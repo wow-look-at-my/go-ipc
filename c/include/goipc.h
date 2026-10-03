@@ -66,6 +66,13 @@ const char *goipc_strerror(int err);
 /* goipc_last_errno returns the errno of the latest GOIPC_ESYS on this thread. */
 int goipc_last_errno(void);
 
+/* goipc_release removes the life socket of this process. Call it only just
+ * before the process exits, after every endpoint is closed. A peer that
+ * already watches this process keeps its connection until the exit. A later
+ * check judges this process gone. A process with no life socket has nothing
+ * to remove, and a second call does nothing. */
+int goipc_release(void);
+
 /* ---- Ring: a lock-free MPSC ring over a caller buffer ---- */
 
 typedef struct goipc_ring {

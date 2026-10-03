@@ -151,8 +151,7 @@ func TestRingReportsFull(t *testing.T) {
 func TestRingWrapsWithPadding(t *testing.T) {
 	r := newTestRing(t, MinCapacity)
 
-	// A 300-byte payload rounds to a 312-byte record, which divides the data
-	// region unevenly and therefore straddles the wrap point on most laps.
+	// A 300-byte payload rounds to a 312-byte record.
 	payload := make([]byte, 300)
 	for i := range payload {
 		payload[i] = byte(i)
@@ -195,8 +194,7 @@ func TestRingClaimAbortReclaimsSpace(t *testing.T) {
 	require.NoError(t, err)
 	c.Abort()
 
-	// The aborted record becomes padding: the reader skips it and reports no
-	// message, but the cursor still advances past it.
+	// The aborted record becomes padding: the reader skips it and reports no message.
 	n, err := r.Read(10, func(uint32, []byte) { t.Fatal("aborted claim was delivered") })
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)

@@ -52,7 +52,7 @@ err = q.Send(ctx, []byte("work item"))
 - On a `Channel` or `Conn`, the other side gets every message the dead peer sent, then `ErrPeerGone`.
 - `CreateQueue` returns `ErrInUse` while a live process holds the name. It replaces an instance whose creator died, and the first create in a process sweeps what crashed processes left behind.
 
-Death is detected through a socket the kernel closes when the process exits, never by a poll or a timeout. See [docs/design.md](docs/design.md).
+Death is detected through a socket the kernel closes when the process exits, never by a poll or a timeout. See [docs/design.md](docs/design.md). Call `ipc.Release()` just before exit to remove that socket file yourself.
 
 ## Streams
 
@@ -125,6 +125,8 @@ C, C++ and Python speak the same wire format. A process in any of them shares a 
 | C | `c/` | `libgoipc.so` / `libgoipc.a`, API in `c/include/goipc.h` |
 | C++ | `cpp/` | header-only C++20, `#include <goipc/goipc.hpp>` |
 | Python | `python/` | package `goipc` over the C library, CPython 3.8 and later |
+
+A C consumer that only links the library runs `make -C c lib`, which builds `c/build/libgoipc.a` and needs neither the `spec/` submodule nor `jq`.
 
 The contract lives in [go-ipc-spec](https://github.com/wow-look-at-my/go-ipc-spec), mounted here at `spec/`. A cross-language suite in `interop/` runs every pair of languages against each other.
 

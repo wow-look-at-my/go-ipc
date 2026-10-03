@@ -20,10 +20,17 @@ import (
 type sockEvent struct {
 	path string
 	srv  *sockServer
+	// conn is nil when the creator was gone at open.
+	conn net.Conn
+	// wmu keeps each request whole on conn.
+	wmu sync.Mutex
 
-	mu     sync.Mutex
-	conns  map[net.Conn]struct{}
-	closed bool
+	mu sync.Mutex
+	// waiters get tokens in the order they asked. Each sent a W.
+	waiters []chan error
+	// lostErr is set once conn breaks. Every later wait reports it.
+	lostErr error
+	closed  bool
 }
 
 type sockServer struct {
@@ -49,7 +56,15 @@ func createSockEvent(name string) (*sockEvent, error) {
 	}
 	srv := &sockServer{ln: ln, clients: make(map[net.Conn]struct{})}
 	go srv.serve()
-	return &sockEvent{path: path, srv: srv, conns: make(map[net.Conn]struct{})}, nil
+	e := &sockEvent{path: path, srv: srv}
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		srv.shutdown()
+		os.Remove(path)
+		return nil, err
+	}
+	e.start(conn)
+	return e, nil
 }
 
 // openSockEvent fails only for a missing path. A socket whose creator died
@@ -60,7 +75,22 @@ func openSockEvent(name string) (*sockEvent, error) {
 	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	return &sockEvent{path: path, conns: make(map[net.Conn]struct{})}, nil
+	e := &sockEvent{path: path}
+	conn, err := net.Dial("unix", path)
+	switch {
+	case err == nil:
+		e.start(conn)
+	case isRefused(err) || errors.Is(err, fs.ErrNotExist):
+		e.lostErr = ErrPeerGone
+	default:
+		return nil, err
+	}
+	return e, nil
+}
+
+func (e *sockEvent) start(conn net.Conn) {
+	e.conn = conn
+	go e.read()
 }
 
 func (s *sockServer) serve() {
@@ -146,80 +176,128 @@ func (s *sockServer) drop(conn net.Conn) {
 	s.mu.Unlock()
 }
 
-func (e *sockEvent) dial() (net.Conn, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closed {
-		return nil, ErrClosed
-	}
-	conn, err := net.Dial("unix", e.path)
-	if err != nil {
-		return nil, err
-	}
-	e.conns[conn] = struct{}{}
-	return conn, nil
+func (e *sockEvent) send(msg []byte) error {
+	e.wmu.Lock()
+	defer e.wmu.Unlock()
+	_, err := e.conn.Write(msg)
+	return err
 }
 
-func (e *sockEvent) hangUp(conn net.Conn) {
+// read hands each token to the oldest waiter. A token with no waiter left
+// goes back to the creator, so no other waiter loses it. The creator sends
+// such a token when a waiter cancelled after its token was on the way.
+func (e *sockEvent) read() {
+	var b [1]byte
+	for {
+		if _, err := e.conn.Read(b[:]); err != nil {
+			e.lose()
+			return
+		}
+		if b[0] != 'T' {
+			continue
+		}
+		e.mu.Lock()
+		if len(e.waiters) > 0 {
+			ch := e.waiters[0]
+			e.waiters = e.waiters[1:]
+			e.mu.Unlock()
+			ch <- nil
+			continue
+		}
+		e.mu.Unlock()
+		e.send([]byte{'S', 1})
+	}
+}
+
+// lose ends every wait once conn breaks. A local close broke it, or the
+// creator went away.
+func (e *sockEvent) lose() {
 	e.mu.Lock()
-	delete(e.conns, conn)
-	e.mu.Unlock()
-	conn.Close()
+	defer e.mu.Unlock()
+	e.lostErr = ErrPeerGone
+	if e.closed {
+		e.lostErr = ErrClosed
+	}
+	for _, ch := range e.waiters {
+		ch <- e.lostErr
+	}
+	e.waiters = nil
 }
 
 // signal to a dead creator is dropped. Nobody waits on it, as with a FIFO nobody reads.
 func (e *sockEvent) signal(n int) error {
-	conn, err := e.dial()
-	if isRefused(err) {
+	e.mu.Lock()
+	closed, gone := e.closed, e.lostErr != nil
+	e.mu.Unlock()
+	if closed {
+		return ErrClosed
+	}
+	if gone {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	defer e.hangUp(conn)
 	for n > 0 {
 		step := min(n, 255)
-		if _, err := conn.Write([]byte{'S', byte(step)}); err != nil {
-			return err
+		if err := e.send([]byte{'S', byte(step)}); err != nil {
+			return e.dropped()
 		}
 		n -= step
 	}
 	return nil
 }
 
-// wait reports ErrPeerGone when the creator dies, because nobody can signal the event after that.
-func (e *sockEvent) wait(ctx context.Context) error {
-	conn, err := e.dial()
-	if isRefused(err) {
-		return ErrPeerGone
-	}
-	if err != nil {
-		return err
-	}
-	defer e.hangUp(conn)
-	if _, err := conn.Write([]byte{'W'}); err != nil {
-		return e.lost()
-	}
-	stop := context.AfterFunc(ctx, func() { conn.Write([]byte{'C'}) })
-	defer stop()
-	var reply [1]byte
-	if _, err := io.ReadFull(conn, reply[:]); err != nil {
-		return e.lost()
-	}
-	if reply[0] == 'T' {
-		return nil
-	}
-	return ctx.Err()
-}
-
-// lost names a broken connection. A local close broke it, or the creator went away.
-func (e *sockEvent) lost() error {
+// dropped is the result of a signal whose connection broke.
+func (e *sockEvent) dropped() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return ErrClosed
 	}
-	return ErrPeerGone
+	return nil
+}
+
+// wait reports ErrPeerGone when the creator dies, because nobody can signal the event after that.
+func (e *sockEvent) wait(ctx context.Context) error {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return ErrClosed
+	}
+	if e.lostErr != nil {
+		e.mu.Unlock()
+		return e.lostErr
+	}
+	ch := make(chan error, 1)
+	e.waiters = append(e.waiters, ch)
+	e.mu.Unlock()
+
+	// A failed write means conn broke. Read then fails too, and lose ends this wait.
+	if err := e.send([]byte{'W'}); err != nil {
+		return <-ch
+	}
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+	}
+	if !e.withdraw(ch) {
+		return <-ch
+	}
+	// The creator drops a queued W of this connection. When none is queued, the token is on its way, and read sends it back.
+	e.send([]byte{'C'})
+	return ctx.Err()
+}
+
+// withdraw removes ch from the waiters. It fails when ch already has a result.
+func (e *sockEvent) withdraw(ch chan error) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i, w := range e.waiters {
+		if w == ch {
+			e.waiters = append(e.waiters[:i], e.waiters[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 
 func (e *sockEvent) close() error {
@@ -229,10 +307,10 @@ func (e *sockEvent) close() error {
 		return ErrClosed
 	}
 	e.closed = true
-	for conn := range e.conns {
-		conn.Close()
-	}
 	e.mu.Unlock()
+	if e.conn != nil {
+		e.conn.Close()
+	}
 	if e.srv != nil {
 		e.srv.shutdown()
 		os.Remove(e.path)

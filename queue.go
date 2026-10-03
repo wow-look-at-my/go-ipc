@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,7 @@ func (c *config) apply(opts []Option) error {
 }
 
 // WithCapacity sets the data region of each underlying ring, in bytes. Only
-// the creating side decides it. An opener reads the value out of the segment.
+// the creating side decides it.
 func WithCapacity(bytes int) Option {
 	return func(c *config) { c.capacity = bytes }
 }
@@ -67,21 +68,17 @@ type Queue struct {
 	// onPeerGone runs after the receiver of this queue exits or closes.
 	onPeerGone []func()
 
-	// closing and active gate the unmap. An operation in flight holds a
-	// pointer into the segment, so Close must wait for it to leave rather
-	// than pull the mapping out from under it.
+	// closing and active gate the unmap.
 	closing atomic.Bool
 	active  atomic.Int64
 	drained chan struct{}
 }
 
-// enter registers an operation against the mapping. A false return means the
-// queue is closing, and the caller must then leave shared memory alone.
+// enter registers an operation against the mapping.
 func (q *Queue) enter() bool {
 	q.active.Add(1)
-	// Both this load and the store in Close are sequentially consistent, so
-	// each side observes the other. Either Close waits for this operation,
-	// or this operation backs out.
+	// Both this load and the store in Close are sequentially consistent, so each
+	// side observes the other.
 	if q.closing.Load() {
 		q.leave()
 		return false
@@ -99,8 +96,7 @@ func (q *Queue) leave() {
 }
 
 // CreateQueue creates the named queue and returns its receiving end. It
-// returns ErrInUse while a live process holds the name. An instance whose
-// holder is gone is replaced.
+// returns ErrInUse while a live process holds the name.
 func CreateQueue(name string, opts ...Option) (*Queue, error) {
 	return createQueue(name, opts, false)
 }
@@ -247,11 +243,7 @@ func (q *Queue) Capacity() int { return q.ring.Capacity() }
 // MaxMessageSize returns the largest payload a single message may carry.
 func (q *Queue) MaxMessageSize() int { return q.ring.MaxMessageSize() }
 
-// Ring exposes the underlying buffer for callers that want the non-blocking
-// primitives directly.
-//
-// The ring points into the mapping and carries no close guard of its own, so a
-// caller that keeps it must not use it after Close.
+// Ring exposes the underlying buffer for callers that want the non-blocking primitives directly.
 func (q *Queue) Ring() *Ring { return q.ring }
 
 // wakeReceiver signals only when a receiver is parked, so an active queue
@@ -262,9 +254,7 @@ func (q *Queue) wakeReceiver() {
 	}
 }
 
-// wakeSenders releases every parked sender. Freed space fits a different
-// number of senders than it fits messages, so the count cannot be derived;
-// waking all of them lets each re-check its own size and park again.
+// wakeSenders releases every parked sender.
 func (q *Queue) wakeSenders() {
 	if w := q.ring.hdr.sendWaiters.Load(); w > 0 {
 		q.notFull.SignalN(int(w))
@@ -273,11 +263,6 @@ func (q *Queue) wakeSenders() {
 
 // park runs attempt, and while it reports blocked, waits on ev for a peer to
 // change the ring.
-//
-// The waiter count is published before the next attempt, and a peer reads it
-// after it publishes its own change. Both are sequentially consistent, so each
-// side sees the other. The wait below cannot begin after a peer has already
-// decided against the wakeup it needs.
 func park(ctx context.Context, ev *Event, waiters *atomic.Int32, blocked error, attempt func() error) error {
 	for {
 		err := attempt()
@@ -293,6 +278,13 @@ func park(ctx context.Context, ev *Event, waiters *atomic.Int32, blocked error, 
 		}
 		err = ev.Wait(ctx)
 		waiters.Add(-1)
+		if errors.Is(err, ErrPeerGone) {
+			// The event creator closed after its last write. That write is in the ring, so read it before peer-gone.
+			if aerr := attempt(); aerr != blocked {
+				return aerr
+			}
+			return err
+		}
 		if err != nil {
 			return err
 		}
@@ -398,9 +390,6 @@ func (q *Queue) Claim(ctx context.Context, typ uint32, length int) (Claim, error
 }
 
 // Commit publishes a claim and wakes a parked receiver.
-//
-// A claim points into the mapping, so it must be committed or aborted before
-// the queue is closed.
 func (q *Queue) Commit(c Claim) {
 	if !q.enter() {
 		return
@@ -419,9 +408,7 @@ func (q *Queue) Abort(c Claim) {
 	}
 	defer q.leave()
 
-	// An abort frees nothing by itself: it commits a padding record that only
-	// the receiver can step over. Waking the receiver is what eventually
-	// returns the space to the senders.
+	// An abort frees nothing by itself: it commits a padding record that only the receiver can step over.
 	c.Abort()
 	q.putSlot(c.slot)
 	q.wakeReceiver()
@@ -429,12 +416,9 @@ func (q *Queue) Abort(c Claim) {
 
 // receive runs a single read and reports whether it freed ring space.
 //
-// Padding that a sender aborted frees space without producing a message, so
-// the space has to be announced even when the read delivers nothing. Without
-// that, a sender parked behind an aborted claim never wakes.
+// Padding that a sender aborted frees space without producing a message, so the space has to be announced even when the read delivers nothing. Without that, a sender parked behind an aborted claim never wakes.
 //
-// A read that finds a claim in its way checks the claim's producer. A dead
-// producer's claim becomes padding, and the read runs again.
+// A read that finds a claim in its way checks the claim's producer. A dead producer's claim becomes padding, and the read runs again.
 func (q *Queue) receive(limit int, fn ReadFunc) (int, error) {
 	// The peer check comes before the read.
 	var gone error

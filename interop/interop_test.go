@@ -35,6 +35,9 @@ const (
 
 var allLangs = []string{"go", "c", "cpp", "py"}
 
+// stopModes are the ways spec/peer.md lets a peer stop.
+var stopModes = []string{"close", "exit", "release"}
+
 // peerEnvs names the variable that holds each peer command. Go has none: its
 // peer is this test binary.
 var peerEnvs = map[string]string{
@@ -330,7 +333,7 @@ func TestInterop(t *testing.T) {
 	})
 
 	t.Run("receiver-gone", func(t *testing.T) {
-		for _, mode := range []string{"close", "exit"} {
+		for _, mode := range stopModes {
 			for _, rl := range ls {
 				for _, sl := range ls {
 					t.Run(mode+"/"+sl+"->"+rl, func(t *testing.T) {
@@ -353,7 +356,7 @@ func TestInterop(t *testing.T) {
 	})
 
 	t.Run("channel-peer-gone", func(t *testing.T) {
-		for _, mode := range []string{"close", "exit"} {
+		for _, mode := range stopModes {
 			for _, ll := range ls {
 				for _, dl := range ls {
 					t.Run(mode+"/"+dl+"->"+ll, func(t *testing.T) {

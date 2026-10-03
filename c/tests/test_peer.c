@@ -175,8 +175,8 @@ TEST(peer_recover_cell, T_FORK)
 
 TEST(peer_receiver_gone_cell, T_FORK)
 {
-	const char *modes[] = {"close", "exit"};
-	for (int m = 0; m < 2; m++) {
+	const char *modes[] = {"close", "exit", "release"};
+	for (int m = 0; m < 3; m++) {
 		char name[96], line[64];
 		unique_name(name, sizeof name, "peerg");
 		const char *recv_args[] = {"goipc-peer", "recv-then-stop", name, "200", "4096", modes[m], NULL};
@@ -197,8 +197,8 @@ TEST(peer_receiver_gone_cell, T_FORK)
 
 TEST(peer_channel_peer_gone_cell, T_FORK)
 {
-	const char *modes[] = {"close", "exit"};
-	for (int m = 0; m < 2; m++) {
+	const char *modes[] = {"close", "exit", "release"};
+	for (int m = 0; m < 3; m++) {
 		char name[96], line[64];
 		unique_name(name, sizeof name, "peerh");
 		const char *recv_args[] = {"goipc-peer", "chan-recv-until-gone", name, "4096", "200", NULL};
@@ -237,7 +237,7 @@ TEST(shared_library_exports_only_the_api, 0)
 	void *h = dlopen(GOIPC_SHARED_LIB, RTLD_NOW | RTLD_LOCAL);
 	REQUIRE(h != NULL, "dlopen: %s", dlerror());
 	const char *api[] = {"goipc_strerror", "goipc_last_errno", "goipc_ring_init", "goipc_queue_create",
-			     "goipc_conn_close_write", "goipc_channel_open", "goipc_event_wait"};
+			     "goipc_conn_close_write", "goipc_channel_open", "goipc_event_wait", "goipc_release"};
 	for (size_t i = 0; i < sizeof api / sizeof api[0]; i++)
 		CHECK(dlsym(h, api[i]) != NULL, "%s is not exported", api[i]);
 	CHECK(dlsym(h, "goipc__join") == NULL, "an internal symbol is exported");
