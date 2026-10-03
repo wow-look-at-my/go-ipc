@@ -123,7 +123,7 @@ func TestSockEventWaitersShareAConnection(t *testing.T) {
 	}
 }
 
-// A creator that writes and then closes must not lose that write.
+// A creator that writes and then exits must not lose that write.
 func TestChannelCloseKeepsLastWrite(t *testing.T) {
 	lastWriteSurvivesClose(t)
 }
@@ -135,9 +135,7 @@ func TestSockChannelCloseKeepsLastWrite(t *testing.T) {
 
 func lastWriteSurvivesClose(t *testing.T) {
 	name := uniqueName(t)
-	creator, err := CreateChannel(name, WithCapacity(MinCapacity))
-	require.NoError(t, err)
-	defer creator.Unlink()
+	_, stdin := startPeer(t, "write-and-die", name)
 	opener, err := OpenChannel(name)
 	require.NoError(t, err)
 	defer opener.Close()
@@ -151,10 +149,9 @@ func lastWriteSurvivesClose(t *testing.T) {
 		_, msg, err := opener.Recv(testContext(t))
 		got <- result{msg, err}
 	}()
-	waitForWaiters(t, creator.Tx(), 1, 0)
-	// The write wakes nobody, so only the close can end the wait.
-	require.NoError(t, creator.Tx().Ring().TryWrite(0, []byte("last")))
-	require.NoError(t, creator.Close())
+	waitForWaiters(t, opener.Rx(), 1, 0)
+	// The child writes without a wake and exits, so only its exit can end the wait.
+	require.NoError(t, stdin.Close())
 
 	r := <-got
 	require.NoError(t, r.err)

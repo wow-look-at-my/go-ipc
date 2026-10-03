@@ -62,6 +62,8 @@ func runChild(role, name, count string) error {
 		return childPeer(ctx, name)
 	case "release":
 		return childRelease()
+	case "write-and-die":
+		return childWriteAndDie(name)
 	case "ident":
 		if _, err := fmt.Println(uint64(selfID())); err != nil {
 			return err
@@ -150,6 +152,23 @@ func childPeer(ctx context.Context, name string) error {
 		return err
 	}
 	if err := readyThenWait(); err != nil {
+		return err
+	}
+	os.Exit(0)
+	return nil
+}
+
+// childWriteAndDie creates a channel and, when stdin closes, writes one
+// message that wakes nobody and exits without a close.
+func childWriteAndDie(name string) error {
+	ch, err := CreateChannel(name, WithCapacity(MinCapacity))
+	if err != nil {
+		return err
+	}
+	if err := readyThenWait(); err != nil {
+		return err
+	}
+	if err := ch.Tx().Ring().TryWrite(0, []byte("last")); err != nil {
 		return err
 	}
 	os.Exit(0)
