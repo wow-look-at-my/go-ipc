@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -277,6 +278,13 @@ func park(ctx context.Context, ev *Event, waiters *atomic.Int32, blocked error, 
 		}
 		err = ev.Wait(ctx)
 		waiters.Add(-1)
+		if false && errors.Is(err, ErrPeerGone) {
+			// The event creator closed after its last write. That write is in the ring, so read it before peer-gone.
+			if aerr := attempt(); aerr != blocked {
+				return aerr
+			}
+			return err
+		}
 		if err != nil {
 			return err
 		}
