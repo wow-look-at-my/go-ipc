@@ -375,7 +375,7 @@ func TestRingManyProducers(t *testing.T) {
 			if n != 0 {
 				continue
 			}
-			// Check producersDone before Empty.
+			// Check producersDone before Empty: records written between both checks are otherwise reported as lost.
 			select {
 			case <-producersDone:
 				if r.Empty() {
