@@ -6,16 +6,6 @@ import (
 )
 
 // An Event is a named wake channel between processes.
-//
-// Signal releases a single waiter; SignalN releases n. A waiter parks the
-// calling goroutine and releases its thread, so thousands of waiters cost no
-// more than thousands of idle goroutines.
-//
-// An Event carries no state beyond pending wakeups. A signal delivered while
-// nobody waits is kept and released to the next waiter, so a caller that
-// checks its own condition before waiting never loses a wakeup. Wait may also
-// return early with no matching signal, so callers must re-check the
-// condition in a loop.
 type Event struct {
 	impl      *eventImpl
 	name      string
@@ -55,13 +45,10 @@ func newEvent(impl *eventImpl, name string, owner bool) *Event {
 // Name returns the name the event was created or opened with.
 func (e *Event) Name() string { return e.name }
 
-// Signal releases a single waiter. It is safe from any goroutine or process
-// that holds the event open, and it never blocks.
+// Signal releases a single waiter.
 func (e *Event) Signal() error { return e.SignalN(1) }
 
-// SignalN releases up to n waiters. Delivery is capped at the capacity of the
-// underlying handle; a waiter that misses a token still re-checks its
-// condition after any other waiter wakes.
+// SignalN releases up to n waiters.
 func (e *Event) SignalN(n int) error {
 	if n <= 0 {
 		return nil
@@ -70,10 +57,6 @@ func (e *Event) SignalN(n int) error {
 }
 
 // Wait blocks until a signal arrives, ctx ends, or the event closes.
-//
-// The goroutine parks; it does not spin and does not hold an OS thread. A
-// return of nil means a wakeup arrived, not that any particular condition now
-// holds, so callers re-check their own state and call Wait again.
 func (e *Event) Wait(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err

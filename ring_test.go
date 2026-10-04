@@ -151,8 +151,7 @@ func TestRingReportsFull(t *testing.T) {
 func TestRingWrapsWithPadding(t *testing.T) {
 	r := newTestRing(t, MinCapacity)
 
-	// A 300-byte payload rounds to a 312-byte record, which divides the data
-	// region unevenly and therefore straddles the wrap point on most laps.
+	// A 300-byte payload rounds to a 312-byte record.
 	payload := make([]byte, 300)
 	for i := range payload {
 		payload[i] = byte(i)
@@ -195,8 +194,7 @@ func TestRingClaimAbortReclaimsSpace(t *testing.T) {
 	require.NoError(t, err)
 	c.Abort()
 
-	// The aborted record becomes padding: the reader skips it and reports no
-	// message, but the cursor still advances past it.
+	// The aborted record becomes padding: the reader skips it and reports no message.
 	n, err := r.Read(10, func(uint32, []byte) { t.Fatal("aborted claim was delivered") })
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
@@ -353,6 +351,13 @@ func TestRingManyProducers(t *testing.T) {
 	go func() {
 		defer close(done)
 		for seen < total {
+			// The producers must be seen done BEFORE the read. Then every record is committed and visible to it.
+			finished := false
+			select {
+			case <-producersDone:
+				finished = true
+			default:
+			}
 			n, err := r.Read(64, func(typ uint32, payload []byte) {
 				var id, i int
 				if _, serr := fmt.Sscanf(string(payload), "%d:%d", &id, &i); serr != nil {
@@ -374,15 +379,13 @@ func TestRingManyProducers(t *testing.T) {
 				return
 			}
 			seen += n
-			// Every producer finished and the ring drained, so no further
-			// message can arrive. Report the shortfall instead of hanging.
-			if n == 0 && r.Empty() {
-				select {
-				case <-producersDone:
-					fail("stalled after %d of %d messages", seen, total)
-					return
-				default:
-				}
+			if n != 0 {
+				continue
+			}
+			// After the producers finish, a read that delivers nothing means a record is lost or stuck uncommitted.
+			if finished {
+				fail("stalled after %d of %d messages, empty=%v", seen, total, r.Empty())
+				return
 			}
 		}
 	}()

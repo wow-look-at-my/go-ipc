@@ -9,6 +9,8 @@ import io
 import os
 import resource
 import struct
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -55,6 +57,30 @@ def needs_slot_api(case: dict) -> bool:
 SLOT_CASES = {"slots", "slot_wrap"}
 
 RING_BYTES = goipc.HEADER_SIZE + 4096
+
+# The release child creates a queue, releases on its first stdin line, and exits at stdin end-of-file.
+_RELEASE_CHILD = """
+import sys
+import goipc
+goipc.release()
+q = goipc.Queue.create(sys.argv[1], int(sys.argv[2]))
+print("ready", flush=True)
+sys.stdin.readline()
+goipc.release()
+goipc.release()
+print("released", flush=True)
+sys.stdin.read()
+q.unlink()
+"""
+
+
+def _consumer(name: str) -> int:
+	"""Reads the consumer field of the queue's ring from its segment."""
+	with open("/dev/shm/go-ipc-%s.inc" % name) as f:
+		inc = f.read()
+	with open("/dev/shm/go-shm-%s.%s" % (name, inc), "rb") as f:
+		f.seek(24)
+		return int(struct.unpack("<Q", f.read(8))[0])
 
 
 class VectorTest(unittest.TestCase):
@@ -894,7 +920,7 @@ class ProcessTest(Named):
 
 	def test_receiver_gone_cell(self) -> None:
 		k = 300
-		for mode in ("close", "exit"):
+		for mode in ("close", "exit", "release"):
 			with self.subTest(mode=mode):
 				name = support.unique_name("rg")
 				recv = support.Peer("recv-then-stop", name, k, CAP, mode)
@@ -921,6 +947,43 @@ class ProcessTest(Named):
 			while True:
 				q.send(b"after", timeout=support.BOUND)
 
+	def test_release_removes_the_life_socket_and_keeps_watches(self) -> None:
+		name = support.unique_name("rel")
+		child = subprocess.Popen(
+			[sys.executable, "-c", _RELEASE_CHILD, name, str(CAP)],
+			stdin=subprocess.PIPE,
+			stdout=subprocess.PIPE,
+			env=support.env(),
+		)
+		self.addCleanup(child.wait, support.BOUND)
+		self.addCleanup(child.kill)
+		assert child.stdin is not None and child.stdout is not None
+		self.addCleanup(child.stdout.close)
+		self.assertEqual(child.stdout.readline(), b"ready\n")
+		life = "/dev/shm/go-ipc-life-%016x.sock" % _consumer(name)
+		self.assertTrue(os.path.exists(life), life)
+
+		# The first send starts a watch on the child before the release.
+		q = goipc.Queue.open(name)
+		self.addCleanup(q.close)
+		q.send(b"before", timeout=support.BOUND)
+
+		child.stdin.write(b"release\n")
+		child.stdin.flush()
+		self.assertEqual(child.stdout.readline(), b"released\n")
+		self.assertFalse(os.path.exists(life), "the life socket is still there after release")
+		# A new handle checks afresh and judges the child gone.
+		with self.assertRaises(goipc.PeerGone):
+			goipc.Queue.open(name)
+		# The child still lives, and the earlier watch still says so.
+		q.send(b"after", timeout=support.BOUND)
+
+		child.stdin.close()
+		self.assertEqual(child.wait(support.BOUND), 0)
+		with self.assertRaises(goipc.PeerGone):
+			while True:
+				q.send(b"gone", timeout=support.BOUND)
+
 	def test_second_creator_is_in_use_while_the_first_process_lives(self) -> None:
 		name = support.unique_name("iu2")
 		recv = support.Peer("recv", name, 1, CAP)
@@ -938,7 +1001,7 @@ class ProcessTest(Named):
 
 	def test_channel_peer_gone_cell(self) -> None:
 		k = 300
-		for mode in ("close", "exit"):
+		for mode in ("close", "exit", "release"):
 			with self.subTest(mode=mode):
 				name = support.unique_name("cpg")
 				recv = support.Peer("chan-recv-until-gone", name, CAP, k)
@@ -948,7 +1011,7 @@ class ProcessTest(Named):
 
 	def test_channel_peer_exit_is_peer_gone_after_the_last_message(self) -> None:
 		k = 40
-		for mode in ("close", "exit"):
+		for mode in ("close", "exit", "release"):
 			with self.subTest(mode=mode):
 				name = support.unique_name("cpg2")
 				c = goipc.Channel.create(name, CAP)

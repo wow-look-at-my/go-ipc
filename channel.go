@@ -80,8 +80,7 @@ func newChannel(name string, tx, rx *Queue, owner bool) *Channel {
 // Name returns the name the channel was created or opened with.
 func (c *Channel) Name() string { return c.name }
 
-// Tx returns the outbound queue, for callers that want its non-blocking
-// operations or its statistics.
+// Tx returns the outbound queue, for callers that want its non-blocking operations or its statistics.
 func (c *Channel) Tx() *Queue { return c.tx }
 
 // Rx returns the inbound queue.

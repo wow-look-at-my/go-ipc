@@ -39,8 +39,7 @@ type Conn struct {
 	readDeadline  deadline
 	writeDeadline deadline
 
-	// base is cancelled by Close, so every in-flight Read and Write returns
-	// without a watcher goroutine of its own.
+	// base is cancelled by Close, so every in-flight Read and Write returns without a watcher goroutine of its own.
 	base       context.Context
 	cancelBase context.CancelFunc
 	closeOnce  sync.Once
@@ -56,9 +55,6 @@ func (a addr) String() string  { return a.name }
 
 // Listen creates the named endpoint and returns a connection on it. It is the
 // creating half of a pair; the peer calls Dial with the same name.
-//
-// The name is a shared memory name, not a network address, and nothing is
-// accepted: a Conn carries exactly a single peer.
 func Listen(name string, opts ...Option) (*Conn, error) {
 	ch, err := CreateChannel(name, opts...)
 	if err != nil {
@@ -76,8 +72,7 @@ func Dial(name string, opts ...Option) (*Conn, error) {
 	return newConn(ch, name), nil
 }
 
-// NewConn wraps an existing channel as a stream. The channel then belongs to
-// the connection, and Close closes it.
+// NewConn wraps an existing channel as a stream. The channel then belongs to the connection, and Close closes it.
 func NewConn(ch *Channel) *Conn { return newConn(ch, ch.Name()) }
 
 func newConn(ch *Channel, name string) *Conn {
@@ -91,8 +86,7 @@ func newConn(ch *Channel, name string) *Conn {
 	}
 }
 
-// Channel returns the underlying channel, for a caller that wants message
-// boundaries back.
+// Channel returns the underlying channel, for a caller that wants message boundaries back.
 func (c *Conn) Channel() *Channel { return c.ch }
 
 // translate maps a context error onto the error a net.Conn caller expects.
@@ -206,8 +200,7 @@ func (c *Conn) Close() error {
 	return err
 }
 
-// Unlink removes the endpoint's names. Only the side that called Listen owns
-// them.
+// Unlink removes the endpoint's names. Only the side that called Listen owns them.
 func (c *Conn) Unlink() error { return c.ch.Unlink() }
 
 // LocalAddr returns the endpoint name.
