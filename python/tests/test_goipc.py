@@ -1211,16 +1211,16 @@ class ServiceTest(unittest.TestCase):
 		self.assertEqual(len(reply), client.max_payload_size)
 
 	def test_carries_a_full_context_prompt(self) -> None:
-"""A prompt's token array travels in one call, so a default channel holds a whole context."""
-name = support.unique_name("prompt")
-svc = service.serve(name, echo)
-self.addCleanup(svc.close)
-client = service.connect(name, timeout=support.BOUND)
-self.addCleanup(client.close)
-tokens = array.array("i", range(1 << 17))
-type_, reply = client.call(SERVICE_ECHO, tokens.tobytes())
-self.assertEqual(type_, SERVICE_ECHOED)
-self.assertEqual(reply, tokens.tobytes())
+		"""A prompt's token array travels in one call, so a default channel holds a whole context."""
+		name = support.unique_name("prompt")
+		svc = service.serve(name, echo)
+		self.addCleanup(svc.close)
+		client = service.connect(name, timeout=support.BOUND)
+		self.addCleanup(client.close)
+		tokens = array.array("i", range(1 << 17))
+		type_, reply = client.call(SERVICE_ECHO, tokens.tobytes())
+		self.assertEqual(type_, SERVICE_ECHOED)
+		self.assertEqual(reply, tokens.tobytes())
 
 def test_rejects_a_bad_name(self) -> None:
 		with self.assertRaises(goipc.InvalidName):
