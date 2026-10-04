@@ -241,8 +241,11 @@ func peerListenEcho(name string, capacity int) error {
 	if err := ready(); err != nil {
 		return err
 	}
-	_, err = io.Copy(conn, conn)
-	return err
+	if _, err := io.Copy(conn, conn); err != nil {
+		return err
+	}
+	// Close sends end-of-stream only when the ring has room. CloseWrite waits for room.
+	return conn.CloseWrite()
 }
 
 func pattern(n int) []byte {

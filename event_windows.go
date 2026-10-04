@@ -27,21 +27,11 @@ var (
 )
 
 // eventImpl backs an Event with a named semaphore.
-//
-// The semaphore counts pending wakeups the way the Unix FIFO counts unread
-// tokens, so both platforms deliver the same semantics. A separate unnamed
-// event lets Close release a waiter blocked inside the kernel.
-//
-// A kernel wait here does occupy a thread, which the Unix poller avoids. The
-// Go runtime hands the processor to another thread for the duration, so other
-// goroutines keep running.
 type eventImpl struct {
 	sem     windows.Handle
 	closing windows.Handle
 
-	// waiters keeps the handles alive until the last wait leaves. Closing a
-	// handle that a thread is blocked on is not safe, so close signals
-	// earliest and frees only after the count reaches empty.
+	// waiters keeps the handles alive until the last wait leaves.
 	mu      sync.Mutex
 	waiters atomic.Int64
 	drained chan struct{}
@@ -51,8 +41,7 @@ type eventImpl struct {
 	gone atomic.Bool
 }
 
-// objectName puts the semaphore in the caller's logon session. A cross-session
-// name would need a privilege that an ordinary program does not hold.
+// objectName puts the semaphore in the caller's logon session.
 func objectName(name string) string { return `Local\go-ipc-` + name + ".event" }
 
 func createEventImpl(name string) (*eventImpl, error) {
@@ -88,8 +77,7 @@ func finishEvent(sem windows.Handle) (*eventImpl, error) {
 	return &eventImpl{sem: sem, closing: closing, drained: make(chan struct{}, 1)}, nil
 }
 
-// unlinkEventImpl has nothing to remove. Windows drops a named object a
-// single time the last handle to it closes.
+// unlinkEventImpl has nothing to remove. Windows drops a named object a single time the last handle to it closes.
 func unlinkEventImpl(string) error { return nil }
 
 func (e *eventImpl) signal(n int) error {

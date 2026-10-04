@@ -256,9 +256,8 @@ public:
 	}
 
 	// try_claim reserves a record of len payload bytes. It returns nullopt when
-	// the ring is full.
-	// A raw claim names no producer. The reader cannot recover it, and waits
-	// for it forever.
+	// the ring is full. A raw claim names no producer. The reader cannot recover
+	// it, and waits for it forever.
 	std::optional<Claim> try_claim(std::uint32_t type, std::size_t len)
 	{
 		std::byte *rec;

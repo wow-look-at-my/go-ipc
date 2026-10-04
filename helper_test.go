@@ -25,11 +25,6 @@ func contextWithTimeout(t *testing.T) context.Context {
 
 // waitForWaiters blocks until the ring reports at least the given number of
 // parked receivers and senders.
-//
-// A test that wants a peer to be genuinely asleep has to wait for it. Launching
-// the goroutine is not enough: it may not have run yet, and a test that races
-// ahead of the park exercises the non-blocking path instead of the thing it
-// means to. These are the same counters the wakeup protocol itself reads.
 func waitForWaiters(t *testing.T, q *Queue, recv, send int32) {
 	t.Helper()
 	require.Eventually(t, func() bool {

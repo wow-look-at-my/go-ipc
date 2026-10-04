@@ -8,8 +8,7 @@ import (
 )
 
 const (
-	// cacheLine separates independently written cursors. The value is x86
-	// lines, which also defeats the adjacent-line prefetcher.
+	// cacheLine separates independently written cursors.
 	cacheLine = 128
 
 	ringMagic   = uint64(0x676F2D6970632D31) // "go-ipc-1"
@@ -32,8 +31,7 @@ const (
 
 	recordAlignment = 8
 
-	// TypePadding fills the tail of the data region when a record would
-	// otherwise straddle the wrap point. A reader skips it.
+	// TypePadding fills the tail of the data region when a record would otherwise straddle the wrap point.
 	TypePadding = uint32(0xFFFFFFFF)
 
 	// noIntent marks a claim slot whose owner claims nothing right now.
@@ -81,16 +79,11 @@ type claimSlot struct {
 	_    [slotSize - 24]byte
 }
 
-// A wrong size here would put a cursor on the wrong cache line and silently
-// lose the false-sharing guarantee, so the build fails instead.
+// A wrong size here would put a cursor on the wrong cache line and silently lose the false-sharing guarantee.
 var _ [0]struct{} = [unsafe.Sizeof(ringHeader{}) - HeaderSize]struct{}{}
 
 // Ring is a lock-free multi-producer single-consumer buffer of
 // variable-length records held inside a caller-supplied byte slice.
-//
-// Any number of goroutines in any number of processes may write. Exactly a
-// single goroutine may read. A Ring holds no pointer into the Go heap, so
-// the same bytes work through a shared memory mapping.
 type Ring struct {
 	hdr  *ringHeader
 	data []byte
@@ -104,9 +97,6 @@ func RingSize(capacity int) int {
 }
 
 // InitRing formats buf as an empty ring and returns a handle to it.
-//
-// Every byte of buf is overwritten. InitRing has a single caller, and every
-// other participant calls AttachRing.
 func InitRing(buf []byte) (*Ring, error) {
 	return initRing(buf, noProc)
 }
@@ -130,8 +120,7 @@ func initRing(buf []byte, consumer procID) (*Ring, error) {
 	for idx := range hdr.slots {
 		hdr.slots[idx].at.Store(noIntent)
 	}
-	// The magic is written last and read so a peer that attaches while
-	// this runs sees either nothing or a complete header.
+	// The magic is written last and read so a peer that attaches while this runs sees either nothing or a complete header.
 	atomic.StoreUint64(&hdr.magic, ringMagic)
 
 	return newRing(hdr, buf, capacity), nil
@@ -169,10 +158,6 @@ func newRing(hdr *ringHeader, buf []byte, capacity uint64) *Ring {
 func (r *Ring) Capacity() int { return int(r.mask) + 1 }
 
 // MaxMessageSize returns the largest payload a single record may carry.
-//
-// The limit is half the capacity so that a claim always fits even when the
-// wrap point forces a padding record ahead of it. A record length is an int32
-// on the wire, which caps the limit again on a very large ring.
 func (r *Ring) MaxMessageSize() int {
 	limit := r.Capacity()/2 - RecordHeaderSize
 	if limit > math.MaxInt32-RecordHeaderSize {
@@ -181,8 +166,7 @@ func (r *Ring) MaxMessageSize() int {
 	return limit
 }
 
-// Buffered returns the number of bytes claimed but not yet consumed. It is a
-// point-in-time sample of a value other participants are changing.
+// Buffered returns the number of bytes claimed but not yet consumed.
 func (r *Ring) Buffered() int {
 	return int(r.hdr.tail.Load() - r.hdr.head.Load())
 }
@@ -219,9 +203,6 @@ func (r *Ring) storeType(idx uint64, v uint32) {
 }
 
 // A Claim is a reserved region of a ring that a producer may fill in place.
-//
-// A single side of Commit or Abort must follow. Until then the reader stops
-// at the claim, so a claim left open stalls the ring.
 type Claim struct {
 	r     *Ring
 	index uint64
@@ -296,8 +277,7 @@ func (r *Ring) tryClaim(slot int, typ uint32, length int) (Claim, error) {
 		toEnd := capacity - index
 		need := aligned
 		if toEnd < aligned {
-			// The record cannot straddle the wrap point, so the claim
-			// also covers a padding record over the remaining bytes.
+			// The record cannot straddle the wrap point, so the claim also covers a padding record over the remaining bytes.
 			need = aligned + toEnd
 		}
 
@@ -358,8 +338,7 @@ func (r *Ring) tryWrite(slot int, typ uint32, payload []byte) error {
 	return nil
 }
 
-// ReadFunc receives a single record. The payload aliases the ring and stays
-// valid only until the function returns, so a caller that keeps it must copy it.
+// ReadFunc receives a single record.
 type ReadFunc func(typ uint32, payload []byte)
 
 // Read passes up to limit committed records to fn and returns how many it

@@ -772,17 +772,30 @@ private:
 		return std::unique_lock<std::mutex>(s.recv_mu);
 	}
 
+	// unless_closing runs attempt only while the handle is open. Close clears
+	// the consumer before it shuts the events, so a woken sender must see the
+	// closing mark before it can see peer-gone.
+	template <class Attempt>
+	static auto unless_closing(detail::queue_state &s, Attempt &attempt)
+	{
+		return [&s, &attempt] {
+			if (s.g.closing())
+				throw error(errc::closed, "goipc: queue " + s.name + " is closed");
+			return attempt();
+		};
+	}
+
 	template <class Attempt>
 	static void park_sender(detail::queue_state &s, const detail::deadline &d, Attempt &&attempt)
 	{
-		detail::park(s.nf, s.waiters(wire::offset::send_waiters), d, s.name, attempt,
+		detail::park(s.nf, s.waiters(wire::offset::send_waiters), d, s.name, unless_closing(s, attempt),
 			     [&] { return s.sender_watches(); }, [&] { s.service_peer(); });
 	}
 
 	template <class Attempt>
 	static void park_receiver(detail::queue_state &s, const detail::deadline &d, Attempt &&attempt)
 	{
-		detail::park(s.ne, s.waiters(wire::offset::recv_waiters), d, s.name, attempt,
+		detail::park(s.ne, s.waiters(wire::offset::recv_waiters), d, s.name, unless_closing(s, attempt),
 			     [&] { return s.receiver_watches(); }, [&] { s.service_receiver(); });
 	}
 

@@ -114,6 +114,20 @@ void role_claim_and_die(std::string_view name, std::uint64_t length, const goipc
 
 bool is_peer_gone(const goipc::error &e) { return e.value() == goipc::errc::peer_gone; }
 
+void check_mode(std::string_view mode)
+{
+	if (mode != "close" && mode != "exit" && mode != "release")
+		throw std::runtime_error("mode must be close, exit or release, not \"" + std::string(mode) + "\"");
+}
+
+// stop_now ends the process with no close. Mode release removes the life socket first.
+[[noreturn]] void stop_now(std::string_view mode)
+{
+	if (mode == "release")
+		goipc::release();
+	die_now();
+}
+
 void role_send_until_gone(std::string_view name, std::string_view sender, const goipc::detail::deadline &d)
 {
 	auto q = goipc::Queue::open(name);
@@ -135,15 +149,14 @@ void role_send_until_gone(std::string_view name, std::string_view sender, const 
 void role_recv_then_stop(std::string_view name, std::uint64_t count, std::uint64_t capacity, std::string_view mode,
 			 const goipc::detail::deadline &d)
 {
-	if (mode != "close" && mode != "exit")
-		throw std::runtime_error("mode must be close or exit, not \"" + std::string(mode) + "\"");
+	check_mode(mode);
 	auto q = goipc::Queue::create(name, capacity);
 	ready();
 	recv_checked(q, count, d);
 	print_line("ok " + std::to_string(count));
-	if (mode == "exit") {
+	if (mode != "close") {
 		q.unlink();
-		die_now();
+		stop_now(mode);
 	}
 	q.close();
 	q.unlink();
@@ -189,13 +202,12 @@ void role_chan_recv_until_gone(std::string_view name, std::uint64_t capacity, st
 void role_chan_send_then_stop(std::string_view name, std::uint64_t count, std::string_view mode,
 			      const goipc::detail::deadline &d)
 {
-	if (mode != "close" && mode != "exit")
-		throw std::runtime_error("mode must be close or exit, not \"" + std::string(mode) + "\"");
+	check_mode(mode);
 	auto c = goipc::Channel::open(name);
 	for (std::uint64_t i = 0; i < count; i++)
 		c.send(static_cast<std::uint32_t>(i), bytes_of(chan_payload(i)), d.left());
-	if (mode == "exit")
-		die_now();
+	if (mode != "close")
+		stop_now(mode);
 	c.close();
 }
 
@@ -303,6 +315,8 @@ void role_listen_echo(std::string_view name, std::uint64_t capacity, const goipc
 			break;
 		c.write(std::span(buf).first(n), d.left());
 	}
+	// close sends end-of-stream only when the ring has room. close_write waits for room.
+	c.close_write(d.left());
 	c.close();
 	c.unlink();
 }

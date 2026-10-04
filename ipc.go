@@ -48,12 +48,10 @@ var (
 	// ErrCorrupt reports a record header that cannot be valid.
 	ErrCorrupt = errors.New("ipc: ring contents are corrupt")
 
-	// ErrUnaligned reports a buffer whose earliest byte is not 8-byte
-	// aligned. The ring stores atomics inside the buffer and needs that alignment.
+	// ErrUnaligned reports a buffer whose earliest byte is not 8-byte aligned.
 	ErrUnaligned = errors.New("ipc: buffer is not 8-byte aligned")
 
 	// ErrNotPollable reports an event handle that cannot join the Go poller.
-	// A wait on it would occupy a thread, so the constructor refuses it.
 	ErrNotPollable = errors.New("ipc: event handle does not support polling")
 
 	// ErrPeerGone reports that the process at the other end exited or closed its end.

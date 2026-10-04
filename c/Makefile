@@ -1,4 +1,5 @@
-# libgoipc, goipc-peer and the C test suite. Targets: build, test, clean.
+# libgoipc, goipc-peer and the C test suite. Targets: lib, build, test, clean.
+# The lib target needs neither spec/ nor jq, so a consumer can build only the library.
 CC ?= cc
 AR ?= ar
 JQ ?= jq
@@ -17,7 +18,8 @@ PEER_GEN := $(B)/peer
 
 SRC := $(wildcard src/*.c)
 TEST_SRC := $(wildcard tests/*.c)
-HEADERS := $(wildcard include/*.h src/*.h tests/*.h) $(GEN)/spec_wire.h
+LIB_HEADERS := $(wildcard include/*.h src/*.h)
+HEADERS := $(LIB_HEADERS) $(wildcard tests/*.h) $(GEN)/spec_wire.h
 
 WARN := -std=c11 -Wall -Wextra -Werror -pthread
 CPPFLAGS := -Iinclude -Isrc -I$(GEN) -D_DEFAULT_SOURCE \
@@ -34,7 +36,9 @@ TEST_OBJ := $(patsubst tests/%.c,$(B)/obj/tests/%.o,$(TEST_SRC))
 ASAN_OBJ := $(patsubst %.c,$(B)/asan/%.o,$(SRC) $(TEST_SRC))
 TSAN_OBJ := $(patsubst %.c,$(B)/tsan/%.o,$(SRC) $(TEST_SRC))
 
-.PHONY: build test clean
+.PHONY: lib build test clean
+
+lib: $(B)/libgoipc.a
 
 build: $(B)/libgoipc.so $(B)/libgoipc.a $(B)/goipc-peer
 
@@ -46,7 +50,7 @@ $(GEN)/vectors.txt: $(SPEC)/vectors/ring/manifest.json tests/vectors.jq
 	@mkdir -p $(@D)
 	$(JQ) -r -f tests/vectors.jq $< > $@.tmp && mv $@.tmp $@
 
-$(B)/obj/%.o: src/%.c $(HEADERS)
+$(B)/obj/%.o: src/%.c $(LIB_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
