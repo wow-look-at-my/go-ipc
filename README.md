@@ -84,6 +84,8 @@ replyTyp, reply, err := c.Call(ctx, 1, []byte("ping"))
 
 An error a handler returns reaches the client as a `*CallError`. With ipcgen messages, `TypedHandler` and `CallTyped` dispatch on type ID, so neither side touches bytes. Python has `goipc.service.serve` and `connect`, C has `goipc_service_serve` and `goipc_client_call`, and C++ has `goipc::Service` and `goipc::Client`. The protocol is `spec/service.md`.
 
+A client channel is sized for a whole call payload, so one call carries a prompt's token array; `WithCapacity` (Python's `capacity`) names a size of your own.
+
 ## Build a message in place
 
 `Claim` hands back the ring bytes themselves. Build the message where the reader will find it, rather than in a buffer that the send must copy:

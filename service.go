@@ -29,6 +29,9 @@ const (
 	serviceClientIDs = incarnationLen
 )
 
+// serviceCapacity sizes a client channel for a whole call payload, such as a prompt's token array.
+const serviceCapacity = 1 << 24
+
 // A CallError is the error a service handler returned, carried to the client.
 type CallError struct {
 	Message string
@@ -356,7 +359,7 @@ func Connect(ctx context.Context, name string, opts ...Option) (*Client, error) 
 	if err != nil {
 		return nil, err
 	}
-	ch, err := CreateChannel(name+serviceClientPrefix+id, opts...)
+	ch, err := CreateChannel(name+serviceClientPrefix+id, serviceOptions(opts)...)
 	if err != nil {
 		return nil, fmt.Errorf("ipc: connect %q: %w", name, err)
 	}
@@ -372,6 +375,11 @@ func Connect(ctx context.Context, name string, opts ...Option) (*Client, error) 
 	}
 	ordinal := int(binary.LittleEndian.Uint64(msg))
 	return &Client{name: name, ordinal: ordinal, ch: ch, seq: serviceFirstSeq - 1}, nil
+}
+
+// serviceOptions puts the service capacity first, so a caller that names its own capacity still wins.
+func serviceOptions(opts []Option) []Option {
+	return append([]Option{WithCapacity(serviceCapacity)}, opts...)
 }
 
 // knock tells a running service about a new client. A service that is not

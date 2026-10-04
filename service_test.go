@@ -286,6 +286,27 @@ func TestServiceRejectsAnOversizedCall(t *testing.T) {
 	assert.Equal(t, testEchoed, typ)
 }
 
+// A prompt's token array travels in one call, so a default service channel has to hold a whole context.
+func TestServiceCarriesAFullContextPrompt(t *testing.T) {
+	name := uniqueName(t)
+	h := newTestService()
+	svc, err := Serve(name, h)
+	require.NoError(t, err)
+	t.Cleanup(func() { svc.Close() })
+	c, err := Connect(contextWithTimeout(t), name)
+	require.NoError(t, err)
+	t.Cleanup(func() { c.Close() })
+
+	prompt := make([]byte, 1<<19)
+	for i := range prompt {
+		prompt[i] = byte(i)
+	}
+	typ, reply, err := c.Call(contextWithTimeout(t), testEcho, prompt)
+	require.NoError(t, err)
+	assert.Equal(t, testEchoed, typ)
+	assert.Equal(t, prompt, reply)
+}
+
 func TestServiceRejectsABadName(t *testing.T) {
 	_, err := Serve("no/slashes", HandlerFunc(nil))
 	assert.ErrorIs(t, err, ErrInvalidName)
