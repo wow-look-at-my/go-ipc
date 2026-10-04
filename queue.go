@@ -357,7 +357,14 @@ func (q *Queue) SendTyped(ctx context.Context, typ uint32, payload []byte) error
 	defer q.leave()
 
 	err := park(ctx, q.notFull, &q.ring.hdr.sendWaiters, ErrFull, func() error {
-		return q.write(typ, payload)
+		if err := q.write(typ, payload); err != nil {
+			// A full ring with no name behind it has no receiver left to drain it.
+			if errors.Is(err, ErrFull) && q.receiverUnlinked() {
+				return ErrPeerGone
+			}
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		return q.sawPeerGone(err)
@@ -381,6 +388,10 @@ func (q *Queue) Claim(ctx context.Context, typ uint32, length int) (Claim, error
 	err := park(ctx, q.notFull, &q.ring.hdr.sendWaiters, ErrFull, func() error {
 		var err error
 		c, err = q.claim(typ, length)
+		// A full ring with no name behind it has no receiver left to drain it.
+		if err != nil && errors.Is(err, ErrFull) && q.receiverUnlinked() {
+			return ErrPeerGone
+		}
 		return err
 	})
 	if err != nil {
