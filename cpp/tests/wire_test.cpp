@@ -50,6 +50,15 @@ TEST(Wire, ConstantsMatchSpec)
 	EXPECT_EQ(wire::opener_to_creator_suffix, spec::opener_to_creator_suffix);
 	EXPECT_EQ(wire::conn_type_data, spec::conn_type_data);
 	EXPECT_EQ(wire::conn_type_eof, spec::conn_type_eof);
+	EXPECT_EQ(wire::service_registry_suffix, spec::service_registry_suffix);
+	EXPECT_EQ(wire::service_client_prefix, spec::service_client_prefix);
+	EXPECT_EQ(wire::incarnation_len, spec::service_client_id_hex_digits);
+	EXPECT_EQ(wire::service_reserved_type_min, spec::service_reserved_type_min);
+	EXPECT_EQ(wire::service_type_knock, spec::service_type_knock);
+	EXPECT_EQ(wire::service_type_hello, spec::service_type_hello);
+	EXPECT_EQ(wire::service_type_error, spec::service_type_error);
+	EXPECT_EQ(wire::service_sequence_size, spec::service_sequence_size);
+	EXPECT_EQ(wire::service_first_sequence, spec::service_first_sequence);
 }
 
 TEST(Wire, PathsMatchSpec)
@@ -194,6 +203,12 @@ TEST(Wire, ErrorNumbersMatchCHeader)
 	static_assert(static_cast<int>(errc::in_use) == -19);
 	static_assert(static_cast<int>(errc::not_consumer) == -20);
 	static_assert(static_cast<int>(errc::too_many_claims) == -21);
+	static_assert(static_cast<int>(errc::call) == GOIPC_ECALL);
+	static_assert(wire::service_reserved_type_min == GOIPC_SERVICE_RESERVED_TYPE_MIN);
+	static_assert(wire::service_type_knock == GOIPC_SERVICE_TYPE_KNOCK);
+	static_assert(wire::service_type_hello == GOIPC_SERVICE_TYPE_HELLO);
+	static_assert(wire::service_type_error == GOIPC_SERVICE_TYPE_ERROR);
+	static_assert(wire::service_sequence_size == GOIPC_SERVICE_SEQUENCE_SIZE);
 	static_assert(wire::ring_magic == GOIPC_RING_MAGIC);
 	static_assert(wire::type_padding == GOIPC_TYPE_PADDING);
 	static_assert(wire::default_capacity == GOIPC_DEFAULT_CAPACITY);

@@ -386,6 +386,143 @@ static int role_chan_send_then_stop(const char *name, uint64_t count, enum stop_
 	return status;
 }
 
+/* ---- the service roles ---- */
+
+enum {
+	SERVICE_ECHO = 1,
+	SERVICE_ECHOED = 2,
+	SERVICE_FAIL = 3,
+	SERVICE_WHO = 4,
+	SERVICE_WHOAMI = 5,
+};
+
+/* A counter counts the clients that went, for the serve role to wait on. */
+struct counter {
+	pthread_mutex_t mu;
+	pthread_cond_t cv;
+	uint64_t gone;
+};
+
+static void service_answer(void *ctx, goipc_session *s, uint32_t type, const uint8_t *payload, size_t len, goipc_reply *reply)
+{
+	(void)ctx;
+	char text[64];
+	switch (type) {
+	case SERVICE_ECHO:
+		goipc_reply_set(reply, SERVICE_ECHOED, payload, len);
+		return;
+	case SERVICE_FAIL: {
+		char *msg = malloc(len + 1);
+		if (msg == NULL) {
+			goipc_reply_error(reply, "out of memory");
+			return;
+		}
+		memcpy(msg, payload, len);
+		msg[len] = '\0';
+		goipc_reply_error(reply, msg);
+		free(msg);
+		return;
+	}
+	case SERVICE_WHO: {
+		uint64_t ordinal = goipc_session_ordinal(s);
+		uint8_t b[8];
+		for (int i = 0; i < 8; i++)
+			b[i] = (uint8_t)(ordinal >> (8 * i));
+		goipc_reply_set(reply, SERVICE_WHOAMI, b, sizeof b);
+		return;
+	}
+	}
+	snprintf(text, sizeof text, "type %" PRIu32 " is not a request", type);
+	goipc_reply_error(reply, text);
+}
+
+static void service_gone(void *ctx, goipc_session *s)
+{
+	(void)s;
+	struct counter *c = ctx;
+	pthread_mutex_lock(&c->mu);
+	c->gone++;
+	pthread_cond_broadcast(&c->cv);
+	pthread_mutex_unlock(&c->mu);
+}
+
+static int role_service_serve(const char *name, uint64_t capacity, uint64_t clients)
+{
+	struct counter counter = {PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, 0};
+	goipc_service *svc;
+	int rc = goipc_service_serve(name, (size_t)capacity, service_answer, service_gone, &counter, &svc);
+	if (rc != GOIPC_OK)
+		return fail_rc("serve", rc);
+	int status = ready();
+	struct timespec deadline;
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += PEER_TIMEOUT_NS / 1000000000;
+	pthread_mutex_lock(&counter.mu);
+	while (status == 0 && counter.gone < clients) {
+		if (pthread_cond_timedwait(&counter.cv, &counter.mu, &deadline) == ETIMEDOUT)
+			status = fail("client %" PRIu64 " of %" PRIu64 " never went", counter.gone, clients);
+	}
+	pthread_mutex_unlock(&counter.mu);
+	if (status == 0 && (printf("ok %" PRIu64 "\n", clients) < 0 || fflush(stdout) != 0))
+		status = fail("write ok: %s", strerror(errno));
+	if ((rc = goipc_service_close(svc)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	goipc_service_destroy(svc);
+	return status;
+}
+
+static int role_service_call(const char *name, uint64_t count, enum stop_mode mode)
+{
+	goipc_client *c;
+	int rc = goipc_client_connect(name, GOIPC_DEFAULT_CAPACITY, left_ns(), &c);
+	if (rc != GOIPC_OK)
+		return fail_rc("connect", rc);
+	int status = 0;
+	char want[32], boom[48], reply[64];
+	uint32_t type;
+	size_t len;
+	for (uint64_t i = 0; status == 0 && i < count; i++) {
+		int n = snprintf(want, sizeof want, "%" PRIu64, i);
+		rc = goipc_client_call(c, SERVICE_ECHO, want, (size_t)n, left_ns(), &type, reply, sizeof reply, &len);
+		if (rc != GOIPC_OK) {
+			status = fail("call %" PRIu64 ": %s", i, goipc_strerror(rc));
+			break;
+		}
+		if (type != SERVICE_ECHOED || len != (size_t)n || memcmp(reply, want, len) != 0) {
+			status = fail("call %" PRIu64 ": reply type %" PRIu32 " payload %.*s, want type %d payload %s", i, type, (int)len, reply, SERVICE_ECHOED, want);
+			break;
+		}
+		n = snprintf(boom, sizeof boom, "boom %" PRIu64, i);
+		rc = goipc_client_call(c, SERVICE_FAIL, boom, (size_t)n, left_ns(), &type, reply, sizeof reply, &len);
+		if (rc != GOIPC_ECALL) {
+			status = fail("call %" PRIu64 ": fail returned %s, want a call error", i, goipc_strerror(rc));
+			break;
+		}
+		if (len != (size_t)n || memcmp(reply, boom, len) != 0)
+			status = fail("call %" PRIu64 ": error %.*s, want %s", i, (int)len, reply, boom);
+	}
+	if (status == 0) {
+		rc = goipc_client_call(c, SERVICE_WHO, NULL, 0, left_ns(), &type, reply, sizeof reply, &len);
+		if (rc != GOIPC_OK)
+			status = fail("who: %s", goipc_strerror(rc));
+		else {
+			uint64_t got = 0;
+			for (size_t i = 0; i < len && i < 8; i++)
+				got |= (uint64_t)(uint8_t)reply[i] << (8 * i);
+			if (type != SERVICE_WHOAMI || len != 8 || got != goipc_client_ordinal(c))
+				status = fail("who: reply type %" PRIu32 " ordinal %" PRIu64 ", want ordinal %" PRIu64, type, got, goipc_client_ordinal(c));
+		}
+	}
+	if (status == 0 && (printf("ok %" PRIu64 "\n", count) < 0 || fflush(stdout) != 0))
+		status = fail("write ok: %s", strerror(errno));
+	if (mode == STOP_EXIT)
+		_exit(status);
+	if ((rc = goipc_client_close(c)) != GOIPC_OK && status == 0)
+		status = fail_rc("close", rc);
+	goipc_client_destroy(c);
+	return status;
+}
+
 static int role_send(const char *name, const char *sender, uint64_t count)
 {
 	goipc_queue *q;
@@ -771,6 +908,24 @@ int main(int argc, char **argv)
 		if (parse_mode(argv[4], &mode) != 0)
 			return 1;
 		return role_chan_send_then_stop(argv[2], a, mode);
+	}
+	if (strcmp(role, "service-serve") == 0) {
+		if (argc != 5)
+			return usage("service-serve <name> <capacity> <clients>");
+		if (parse_u64(argv[3], SIZE_MAX, &a) != 0)
+			return fail("capacity: %s is not a size", argv[3]);
+		if (parse_u64(argv[4], UINT32_MAX, &b) != 0)
+			return fail("clients: %s is not a count", argv[4]);
+		return role_service_serve(argv[2], a, b);
+	}
+	if (strcmp(role, "service-call") == 0) {
+		if (argc != 5)
+			return usage("service-call <name> <count> <mode>");
+		if (parse_u64(argv[3], UINT32_MAX, &a) != 0)
+			return fail("count: %s is not a count", argv[3]);
+		if (parse_mode(argv[4], &mode) != 0)
+			return 1;
+		return role_service_call(argv[2], a, mode);
 	}
 	return fail("unknown role %s", role);
 }

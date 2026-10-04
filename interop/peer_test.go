@@ -133,6 +133,28 @@ func runPeer(args []string) error {
 			return fmt.Errorf("count: %w", err)
 		}
 		return peerChanSendThenStop(ctx, rest[0], count, rest[2])
+	case "service-serve":
+		if len(rest) != 3 {
+			return errors.New("usage: service-serve <name> <capacity> <clients>")
+		}
+		capacity, err := strconv.Atoi(rest[1])
+		if err != nil {
+			return fmt.Errorf("capacity: %w", err)
+		}
+		clients, err := strconv.Atoi(rest[2])
+		if err != nil {
+			return fmt.Errorf("clients: %w", err)
+		}
+		return peerServiceServe(ctx, rest[0], capacity, clients)
+	case "service-call":
+		if len(rest) != 3 {
+			return errors.New("usage: service-call <name> <count> <close|exit>")
+		}
+		count, err := strconv.Atoi(rest[1])
+		if err != nil {
+			return fmt.Errorf("count: %w", err)
+		}
+		return peerServiceCall(ctx, rest[0], count, rest[2])
 	default:
 		return fmt.Errorf("unknown role %q", role)
 	}

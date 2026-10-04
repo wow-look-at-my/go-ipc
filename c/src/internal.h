@@ -25,6 +25,8 @@
 #define GOIPC_NOT_FULL_SUFFIX ".nf"
 #define GOIPC_C2O_SUFFIX ".c2o"
 #define GOIPC_O2C_SUFFIX ".o2c"
+#define GOIPC_SERVICE_REGISTRY_SUFFIX ".svc"
+#define GOIPC_SERVICE_CLIENT_PREFIX ".c."
 
 #define GOIPC_NAME_PREFIX "go-ipc-"
 #define GOIPC_NAME_SUFFIX ".name"

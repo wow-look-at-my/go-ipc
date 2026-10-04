@@ -89,6 +89,15 @@ def start(fn: Callable[[], Any], name: str = "worker") -> Worker:
 	return w
 
 
+def wait_until(test: unittest.TestCase, pred: Callable[[], bool], what: str, timeout: float = BOUND) -> None:
+	"""Fails the test with what unless pred holds within timeout."""
+	deadline = time.monotonic() + timeout
+	while not pred():
+		if time.monotonic() > deadline:
+			test.fail(what)
+		time.sleep(0.001)
+
+
 def env() -> dict:
 	"""The environment for a peer process: this one, with python/ on PYTHONPATH."""
 	out = dict(os.environ)

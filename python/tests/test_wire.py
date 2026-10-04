@@ -79,6 +79,18 @@ class WireConstantsTest(unittest.TestCase):
 		self.assertEqual(wire.CONN_TYPE_DATA, self.spec["conn"]["type_data"])
 		self.assertEqual(wire.CONN_TYPE_EOF, self.spec["conn"]["type_eof"])
 
+	def test_service_constants(self) -> None:
+		s = self.spec["service"]
+		self.assertEqual(wire.SERVICE_REGISTRY_SUFFIX, s["registry_suffix"])
+		self.assertEqual(wire.SERVICE_CLIENT_PREFIX, s["client_prefix"])
+		self.assertEqual(wire.SERVICE_CLIENT_ID_HEX_DIGITS, s["client_id_hex_digits"])
+		self.assertEqual(wire.SERVICE_RESERVED_TYPE_MIN, s["reserved_type_min"])
+		self.assertEqual(wire.SERVICE_TYPE_KNOCK, s["type_knock"])
+		self.assertEqual(wire.SERVICE_TYPE_HELLO, s["type_hello"])
+		self.assertEqual(wire.SERVICE_TYPE_ERROR, s["type_error"])
+		self.assertEqual(wire.SERVICE_SEQUENCE_SIZE, s["sequence_size"])
+		self.assertEqual(wire.SERVICE_FIRST_SEQUENCE, s["first_sequence"])
+
 	def test_package_exports_constants(self) -> None:
 		for name in (
 			"RING_MAGIC", "RING_VERSION", "HEADER_SIZE", "MIN_CAPACITY", "RECORD_HEADER_SIZE",
@@ -109,6 +121,7 @@ class ErrorsTest(unittest.TestCase):
 			"EBUFFER": goipc.BufferTooSmall, "EOF": goipc.EndOfStream,
 			"EPEERGONE": goipc.PeerGone, "EINUSE": goipc.InUse,
 			"ENOTCONSUMER": goipc.NotConsumer, "ETOOMANYCLAIMS": goipc.TooManyClaims,
+			"ECALL": goipc.CallError,
 		}
 		self.assertEqual(text.count("\tGOIPC_E"), len(names), "goipc.h has an error code this table lacks")
 		for suffix, cls in names.items():

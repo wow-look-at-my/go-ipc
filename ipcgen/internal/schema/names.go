@@ -72,7 +72,10 @@ func setOf(words ...string) map[string]bool {
 }
 
 // goMethods holds the Go methods that generated code declares on every message.
-var goMethods = setOf("Size", "MarshalTo", "MarshalBinary", "UnmarshalBinary")
+var goMethods = setOf("Size", "MarshalTo", "MarshalBinary", "UnmarshalBinary", "TypeID")
 
 // pyNames holds module names that generated Python declares and a message must not shadow.
 var pyNames = setOf("MESSAGES")
+
+// goNames holds package names that generated Go declares and a message must not shadow.
+var goNames = setOf("Message", "NewMessage")

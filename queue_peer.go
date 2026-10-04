@@ -3,6 +3,8 @@ package ipc
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"sync"
 	"sync/atomic"
 )
@@ -85,9 +87,18 @@ func (q *Queue) watchPeer(id procID) error {
 	return nil
 }
 
-// sawPeerGone records a wait that reported the receiver gone. The watch reports
-// the same exit, but it can arrive after the next send.
+// receiverUnlinked reports whether the receiver removed the queue's name, which it does on its way out.
+func (q *Queue) receiverUnlinked() bool {
+	_, err := os.Stat(namePath(q.name))
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// sawPeerGone records a wait that reported the receiver gone. The watch
+// reports the same exit, but it can arrive after the next send.
 func (q *Queue) sawPeerGone(err error) error {
+	if errors.Is(err, fs.ErrNotExist) {
+		err = fmt.Errorf("%w: %v", ErrPeerGone, err)
+	}
 	if errors.Is(err, ErrPeerGone) {
 		q.peer.gone.Store(true)
 	}

@@ -259,6 +259,27 @@ func TestSendReportsClosedReceiver(t *testing.T) {
 	assert.ErrorIs(t, sender.TrySend([]byte("x")), ErrPeerGone)
 }
 
+// A receiver that unlinks on its way out removes the not-full event before
+// the watch on its process reports the exit. A sender that parks on a full
+// queue in that window finds no event to wait on.
+func TestSendReportsUnlinkedReceiver(t *testing.T) {
+	name := uniqueName(t)
+	q, err := CreateQueue(name, WithCapacity(4096))
+	require.NoError(t, err)
+	defer q.Close()
+	sender, err := OpenQueue(name)
+	require.NoError(t, err)
+	defer sender.Close()
+	payload := make([]byte, 512)
+	for sender.TrySend(payload) == nil {
+	}
+
+	require.NoError(t, q.Unlink())
+	assert.ErrorIs(t, sender.Send(testContext(t), payload), ErrPeerGone)
+	_, err = sender.Claim(testContext(t), 0, len(payload))
+	assert.ErrorIs(t, err, ErrPeerGone)
+}
+
 func TestCreateQueueRejectsLiveHolder(t *testing.T) {
 	name := uniqueName(t)
 	q, err := CreateQueue(name)

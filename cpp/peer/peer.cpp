@@ -1,6 +1,7 @@
 // The C++ peer of spec/peer.md.
 #include <charconv>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -206,6 +208,89 @@ void role_chan_send_then_stop(std::string_view name, std::uint64_t count, std::s
 		c.send(static_cast<std::uint32_t>(i), bytes_of(chan_payload(i)), d.left());
 	if (mode != "close")
 		stop_now(mode);
+	c.close();
+}
+
+// The request and reply types of the service roles.
+constexpr std::uint32_t service_echo = 1;
+constexpr std::uint32_t service_echoed = 2;
+constexpr std::uint32_t service_fail = 3;
+constexpr std::uint32_t service_who = 4;
+constexpr std::uint32_t service_whoami = 5;
+
+std::string text_of(std::span<const std::byte> b) { return {reinterpret_cast<const char *>(b.data()), b.size()}; }
+
+goipc::reply service_answer(goipc::Session &s, std::uint32_t type, std::span<const std::byte> payload)
+{
+	switch (type) {
+	case service_echo:
+		return {service_echoed, std::vector<std::byte>(payload.begin(), payload.end())};
+	case service_fail:
+		throw std::runtime_error(text_of(payload));
+	case service_who: {
+		std::uint64_t ordinal = s.ordinal();
+		goipc::reply r{service_whoami, std::vector<std::byte>(sizeof ordinal)};
+		std::memcpy(r.payload.data(), &ordinal, sizeof ordinal);
+		return r;
+	}
+	}
+	throw std::runtime_error("type " + std::to_string(type) + " is not a request");
+}
+
+void role_service_serve(std::string_view name, std::uint64_t capacity, std::uint64_t clients, const goipc::detail::deadline &d)
+{
+	std::mutex mu;
+	std::condition_variable cv;
+	std::uint64_t gone = 0;
+	auto svc = goipc::Service::serve(
+		name, service_answer,
+		[&](goipc::Session &) {
+			std::lock_guard l(mu);
+			gone++;
+			cv.notify_all();
+		},
+		capacity);
+	ready();
+	{
+		std::unique_lock l(mu);
+		auto left = d.left();
+		if (!cv.wait_for(l, left ? *left : std::chrono::hours(1), [&] { return gone >= clients; }))
+			throw std::runtime_error("client " + std::to_string(gone) + " of " + std::to_string(clients) + " never went");
+	}
+	print_line("ok " + std::to_string(clients));
+	svc.close();
+}
+
+void role_service_call(std::string_view name, std::uint64_t count, std::string_view mode, const goipc::detail::deadline &d)
+{
+	if (mode != "close" && mode != "exit")
+		throw std::runtime_error("mode must be close or exit, not \"" + std::string(mode) + "\"");
+	auto c = goipc::Client::connect(name, d.left());
+	for (std::uint64_t i = 0; i < count; i++) {
+		std::string want = std::to_string(i);
+		goipc::message m = c.call(service_echo, bytes_of(want), d.left());
+		if (m.type != service_echoed || text_of(m.payload) != want)
+			throw std::runtime_error("call " + want + ": reply type " + std::to_string(m.type) + " payload \"" +
+						 text_of(m.payload) + "\", want type 2 payload \"" + want + "\"");
+		std::string boom = "boom " + want;
+		try {
+			c.call(service_fail, bytes_of(boom), d.left());
+			throw std::runtime_error("call " + want + ": fail returned a reply, want a call error");
+		} catch (const goipc::call_error &e) {
+			if (e.message() != boom)
+				throw std::runtime_error("call " + want + ": error \"" + e.message() + "\", want \"" + boom + "\"");
+		}
+	}
+	goipc::message who = c.call(service_who, {}, d.left());
+	std::uint64_t got = 0;
+	if (who.payload.size() == sizeof got)
+		std::memcpy(&got, who.payload.data(), sizeof got);
+	if (who.type != service_whoami || who.payload.size() != sizeof got || got != c.ordinal())
+		throw std::runtime_error("who: reply type " + std::to_string(who.type) + " ordinal " + std::to_string(got) +
+					 ", want ordinal " + std::to_string(c.ordinal()));
+	print_line("ok " + std::to_string(count));
+	if (mode == "exit")
+		die_now();
 	c.close();
 }
 
@@ -428,6 +513,12 @@ void run(int argc, char **argv)
 	} else if (role == "chan-send-then-stop") {
 		need(3, "chan-send-then-stop <name> <count> <mode>");
 		role_chan_send_then_stop(argv[2], parse_u64("count", argv[3]), argv[4], d);
+	} else if (role == "service-serve") {
+		need(3, "service-serve <name> <capacity> <clients>");
+		role_service_serve(argv[2], parse_u64("capacity", argv[3]), parse_u64("clients", argv[4]), d);
+	} else if (role == "service-call") {
+		need(3, "service-call <name> <count> <mode>");
+		role_service_call(argv[2], parse_u64("count", argv[3]), argv[4], d);
 	} else {
 		throw std::runtime_error("unknown role \"" + std::string(role) + "\"");
 	}

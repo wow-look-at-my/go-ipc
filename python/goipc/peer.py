@@ -6,10 +6,13 @@ import dataclasses
 import importlib
 import json
 import os
+import struct
 import sys
 import threading
-from typing import Any, Callable, Dict, List, NoReturn
+from typing import Any, Callable, Dict, List, NoReturn, Tuple
 
+from . import service
+from . import wire
 from ._endpoints import Channel, Conn, Queue, release
 from .errors import PeerGone
 
@@ -358,7 +361,65 @@ def role_typed_recv(args: List[str]) -> None:
 			q.close()
 
 
+SERVICE_ECHO, SERVICE_ECHOED, SERVICE_FAIL, SERVICE_WHO, SERVICE_WHOAMI = 1, 2, 3, 4, 5
+
+
+def _service_handler(session: service.Session, type_: int, payload: bytes) -> Tuple[int, bytes]:
+	if type_ == SERVICE_ECHO:
+		return SERVICE_ECHOED, payload
+	if type_ == SERVICE_FAIL:
+		raise PeerError(payload.decode("utf-8"))
+	if type_ == SERVICE_WHO:
+		return SERVICE_WHOAMI, struct.pack("<Q", session.ordinal)
+	raise PeerError("type %d is not a request" % type_)
+
+
+def role_service_serve(args: List[str]) -> None:
+	_arity(args, "<name> <capacity> <clients>")
+	name = args[0]
+	capacity, clients = _ints(args[1:], ["capacity", "clients"])
+	gone = threading.Semaphore(0)
+	svc = service.serve(name, _service_handler, on_gone=lambda session: gone.release(), capacity=capacity)
+	try:
+		_ready()
+		for _ in range(clients):
+			gone.acquire()
+		_print("ok %d" % clients)
+	finally:
+		svc.close()
+
+
+def role_service_call(args: List[str]) -> None:
+	_arity(args, "<name> <count> <mode>")
+	name = args[0]
+	(count,) = _ints(args[1:2], ["count"])
+	mode = _mode(args[2])
+	client = service.connect(name, timeout=LIMIT_SECONDS, capacity=wire.DEFAULT_CAPACITY)
+	for i in range(count):
+		want = str(i).encode("ascii")
+		type_, reply = client.call(SERVICE_ECHO, want)
+		if type_ != SERVICE_ECHOED or reply != want:
+			raise PeerError("call %d: reply type %d payload %r, want type %d payload %r" % (i, type_, reply, SERVICE_ECHOED, want))
+		boom = "boom %d" % i
+		try:
+			client.call(SERVICE_FAIL, boom.encode("utf-8"))
+		except service.CallError as exc:
+			if str(exc) != boom:
+				raise PeerError("call %d: error %r, want %r" % (i, str(exc), boom))
+		else:
+			raise PeerError("call %d: a fail call succeeded, want a call error" % i)
+	type_, reply = client.call(SERVICE_WHO)
+	if type_ != SERVICE_WHOAMI or reply != struct.pack("<Q", client.ordinal):
+		raise PeerError("who: reply type %d payload %r, want ordinal %d" % (type_, reply, client.ordinal))
+	_print("ok %d" % count)
+	if mode == "exit":
+		_exit_at_once()
+	client.close()
+
+
 ROLES: Dict[str, Callable[[List[str]], None]] = {
+	"service-serve": role_service_serve,
+	"service-call": role_service_call,
 	"recv": role_recv,
 	"send": role_send,
 	"listen-echo": role_listen_echo,

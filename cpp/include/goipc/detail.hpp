@@ -69,6 +69,18 @@ inline constexpr std::string_view opener_to_creator_suffix = ".o2c";
 inline constexpr std::uint32_t conn_type_data = 0;
 inline constexpr std::uint32_t conn_type_eof = 1;
 
+// The service layer of spec/service.md.
+inline constexpr std::string_view service_registry_suffix = ".svc";
+inline constexpr std::string_view service_client_prefix = ".c.";
+// service_reserved_type_min starts the record types the service layer keeps for itself.
+inline constexpr std::uint32_t service_reserved_type_min = 0xFFFFFFF0u;
+inline constexpr std::uint32_t service_type_knock = 0xFFFFFFF0u;
+inline constexpr std::uint32_t service_type_hello = 0xFFFFFFF1u;
+inline constexpr std::uint32_t service_type_error = 0xFFFFFFF2u;
+// service_sequence_size is the sequence number that starts every request and reply payload.
+inline constexpr std::size_t service_sequence_size = 8;
+inline constexpr std::uint64_t service_first_sequence = 1;
+
 // Offsets of the control block fields.
 namespace offset {
 inline constexpr std::size_t magic = 0;
