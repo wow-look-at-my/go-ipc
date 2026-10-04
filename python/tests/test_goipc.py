@@ -1227,7 +1227,7 @@ class ServiceTest(unittest.TestCase):
 		payload = goipc.wire.max_message_size(service.SERVICE_CAPACITY)
 		self.assertGreaterEqual(payload, 4 * (1 << 17))
 
-def test_rejects_a_bad_name(self) -> None:
+	def test_rejects_a_bad_name(self) -> None:
 		with self.assertRaises(goipc.InvalidName):
 			service.serve("no/slashes", echo)
 		with self.assertRaises(goipc.InvalidName):
