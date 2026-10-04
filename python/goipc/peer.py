@@ -12,6 +12,7 @@ import threading
 from typing import Any, Callable, Dict, List, NoReturn, Tuple
 
 from . import service
+from . import wire
 from ._endpoints import Channel, Conn, Queue, release
 from .errors import PeerGone
 
@@ -393,7 +394,7 @@ def role_service_call(args: List[str]) -> None:
 	name = args[0]
 	(count,) = _ints(args[1:2], ["count"])
 	mode = _mode(args[2])
-	client = service.connect(name, timeout=LIMIT_SECONDS)
+	client = service.connect(name, timeout=LIMIT_SECONDS, capacity=wire.DEFAULT_CAPACITY)
 	for i in range(count):
 		want = str(i).encode("ascii")
 		type_, reply = client.call(SERVICE_ECHO, want)

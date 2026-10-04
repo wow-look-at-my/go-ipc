@@ -52,7 +52,7 @@ err = q.Send(ctx, []byte("work item"))
 - On a `Channel` or `Conn`, the other side gets every message the dead peer sent, then `ErrPeerGone`.
 - `CreateQueue` returns `ErrInUse` while a live process holds the name. It replaces an instance whose creator died, and the first create in a process sweeps what crashed processes left behind.
 
-Death is detected through a socket the kernel closes when the process exits, never by a poll or a timeout. See [docs/design.md](docs/design.md). Call `ipc.Release()` just before exit to remove that socket file yourself.
+Death is detected through a socket the kernel closes when the process exits, not by a poll or a timeout. See [docs/design.md](docs/design.md). Call `ipc.Release()` just before exit to remove that socket file yourself.
 
 ## Streams
 
@@ -83,6 +83,8 @@ replyTyp, reply, err := c.Call(ctx, 1, []byte("ping"))
 ```
 
 An error a handler returns reaches the client as a `*CallError`. With ipcgen messages, `TypedHandler` and `CallTyped` dispatch on type ID, so neither side touches bytes. Python has `goipc.service.serve` and `connect`, C has `goipc_service_serve` and `goipc_client_call`, and C++ has `goipc::Service` and `goipc::Client`. The protocol is `spec/service.md`.
+
+A client channel is sized for a whole call payload, so one call carries a prompt's token array. `WithCapacity` (Python's `capacity`) names a size of your own.
 
 ## Build a message in place
 

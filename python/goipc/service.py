@@ -34,6 +34,9 @@ GoneHandler = Callable[["Session"], None]
 
 _SEQ = struct.Struct("<Q")
 
+# A call carries a whole payload, such as a prompt's token array, so a client channel fits a whole context.
+SERVICE_CAPACITY = 1 << 24
+
 
 def _registry_name(name: str) -> str:
 	return name + wire.SERVICE_REGISTRY_SUFFIX
@@ -300,7 +303,7 @@ def connect(
 	name: str,
 	timeout: Optional[float] = None,
 	*,
-	capacity: int = wire.DEFAULT_CAPACITY,
+	capacity: int = SERVICE_CAPACITY,
 	messages: Optional[Mapping[int, Any]] = None,
 ) -> Client:
 	"""Connects to the named service.
