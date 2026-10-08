@@ -810,7 +810,8 @@ private:
 
 	// check_far_side reports why the far side of a channel is gone, or nothing.
 	// Its result counts only when the read after it finds nothing, so a peer
-	// that sent a message and then exited has its message delivered first.
+	// that sent a message and then exited has its message. That message is
+	// delivered first.
 	std::exception_ptr check_far_side()
 	{
 		auto &pq = s_->peer_queue;

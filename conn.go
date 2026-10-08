@@ -20,7 +20,7 @@ const (
 
 // A Conn is a net.Conn over a Channel.
 //
-// Write splits its input across as many messages as it needs, and Read
+// Write splits its input across as many messages as it needs. Read
 // reassembles the stream, so the byte boundaries a caller sees are its own.
 // This is the layer an encoder goes on, such as gob, protobuf or JSON.
 type Conn struct {

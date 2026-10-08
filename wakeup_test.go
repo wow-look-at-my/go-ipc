@@ -12,7 +12,7 @@ import (
 // wake handle that processes share.
 //
 // A process that consumes a token with nobody waiting behind it strands the
-// waiter in the other process, which then sleeps with no further signal due.
+// waiter in the other process. This then sleeps with no further signal due.
 // Only a waiter reads here, so an idle process takes nothing.
 func TestEventDoesNotStealForeignWakeups(t *testing.T) {
 	name := uniqueName(t)

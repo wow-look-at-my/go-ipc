@@ -326,7 +326,7 @@ func TestCrossProcessQueue(t *testing.T) {
 }
 
 // TestCrossProcessConnRoundTrip pushes a payload larger than a single
-// message through the stream layer and back, so both the split on write
+// message through the stream layer and back. Both the split on write
 // and the reassembly on read cross a process boundary.
 func TestCrossProcessConnRoundTrip(t *testing.T) {
 	name := uniqueName(t)

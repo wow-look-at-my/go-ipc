@@ -187,8 +187,8 @@ struct service_state : std::enable_shared_from_this<service_state> {
 	}
 
 	// adopt opens a client's channel and serves it. An open that fails means
-	// the channel was adopted already, its client has gone, or the client has
-	// not finished creating it and knocks when it has.
+	// the channel was adopted already, its client has gone. Otherwise, the
+	// client has not finished creating it and knocks when it has.
 	void adopt(const std::string &id)
 	{
 		reap();

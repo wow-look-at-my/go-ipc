@@ -194,8 +194,8 @@ static void *connect_in_thread(void *arg)
 }
 
 /* A client that connects before the service exists is adopted when it
- * starts, whether the service finds its channel in the scan or hears its
- * knock. */
+ * starts, whether the service finds its channel. In the scan or hears
+ * its knock. */
 TEST(service_client_waits_for_the_service, T_THREADS)
 {
 	char name[96];

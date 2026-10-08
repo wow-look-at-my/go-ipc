@@ -135,7 +135,7 @@ void goipc__gate_destroy(struct goipc_gate *g)
 	pthread_mutex_destroy(&g->mu);
 }
 
-/* The increment here and the store in gate_close are both seq_cst, so either
+/* The increment here and the store in gate_close are both seq_cst. Either
  * the close waits for this operation or this operation backs out. */
 bool goipc__gate_enter(struct goipc_gate *g)
 {
