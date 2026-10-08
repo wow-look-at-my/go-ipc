@@ -84,18 +84,29 @@ func TestLockFileHolderDeathReleases(t *testing.T) {
 	unlock()
 }
 
-// The non-waiting take fails at once on a held lock and succeeds on a free one.
-func TestLockFileWithoutWaitFailsWhileHeld(t *testing.T) {
+// TryLockFile fails at once on a held lock and succeeds on a free one.
+func TestTryLockFileFailsWhileHeld(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.lock")
 	holder, err := lockWithin(path, 5*time.Second)
 	require.NoError(t, err)
 
-	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
-	require.NoError(t, err)
-	defer f.Close()
-	require.Error(t, lockFile(f, false), "a held lock refuses a take that does not wait")
+	_, err = TryLockFile(path)
+	require.Error(t, err, "a held lock refuses a take that does not wait")
 
 	holder()
-	require.NoError(t, lockFile(f, false))
-	unlockFile(f)
+	unlock, err := TryLockFile(path)
+	require.NoError(t, err)
+
+	_, err = lockWithin(path, 200*time.Millisecond)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "a lock TryLockFile took excludes a waiter")
+	unlock()
+}
+
+// A path that cannot be opened is an error, not a lock.
+func TestLockFileReportsAnUnopenablePath(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "absent", "x.lock")
+	_, err := TryLockFile(missing)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = LockFile(context.Background(), missing)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

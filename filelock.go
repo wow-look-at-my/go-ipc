@@ -37,12 +37,31 @@ func LockFile(ctx context.Context, path string) (unlock func(), err error) {
 			f.Close()
 			return nil, &os.PathError{Op: "lock", Path: path, Err: err}
 		}
-		return func() {
-			unlockFile(f)
-			f.Close()
-		}, nil
+		return releaser(f), nil
 	case <-ctx.Done():
 		close(abandoned)
 		return nil, ctx.Err()
+	}
+}
+
+// TryLockFile is LockFile without the wait. A lock another holder has fails
+// at once.
+func TryLockFile(path string) (unlock func(), err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o666)
+	if err != nil {
+		return nil, err
+	}
+	if err := lockFile(f, false); err != nil {
+		f.Close()
+		return nil, &os.PathError{Op: "lock", Path: path, Err: err}
+	}
+	return releaser(f), nil
+}
+
+// releaser answers the function that lets go of f's lock and closes f.
+func releaser(f *os.File) func() {
+	return func() {
+		unlockFile(f)
+		f.Close()
 	}
 }
