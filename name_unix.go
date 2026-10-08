@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/wow-look-at-my/go-ipc/filelock"
 	"golang.org/x/sys/unix"
 )
 
@@ -49,7 +50,7 @@ func lockName(name string) (*nameLock, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := lockFile(f, false); err != nil {
+		if err := filelock.Take(f, false); err != nil {
 			f.Close()
 			if errors.Is(err, unix.EWOULDBLOCK) {
 				return nil, fmt.Errorf("ipc: %q: %w", name, ErrInUse)

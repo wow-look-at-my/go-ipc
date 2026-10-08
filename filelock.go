@@ -2,66 +2,17 @@ package ipc
 
 import (
 	"context"
-	"os"
+
+	"github.com/wow-look-at-my/go-ipc/filelock"
 )
 
-// LockFile takes an exclusive OS lock on the file at path, creating it if it
-// does not exist, and returns the function that releases it. The wait blocks
-// lock when its holder exits, however it exits, so a lock never outlives the
-// process that took it. The file itself stays in place; removing it would let
-// a later opener lock a new inode while a waiter still blocks on the one.
-//
-// A ctx that ends returns the caller at once. The kernel wait it leaves
-// behind drops the lock as soon as it is granted.
+// LockFile is filelock.Lock. A program that must not link net imports
+// filelock directly.
 func LockFile(ctx context.Context, path string) (unlock func(), err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o666)
-	if err != nil {
-		return nil, err
-	}
-	granted := make(chan error)
-	abandoned := make(chan struct{})
-	go func() {
-		err := lockFile(f, true)
-		select {
-		case granted <- err:
-		case <-abandoned:
-			if err == nil {
-				unlockFile(f)
-			}
-			f.Close()
-		}
-	}()
-	select {
-	case err := <-granted:
-		if err != nil {
-			f.Close()
-			return nil, &os.PathError{Op: "lock", Path: path, Err: err}
-		}
-		return releaser(f), nil
-	case <-ctx.Done():
-		close(abandoned)
-		return nil, ctx.Err()
-	}
+	return filelock.Lock(ctx, path)
 }
 
-// TryLockFile is LockFile without the wait. A lock another holder has fails
-// at once.
+// TryLockFile is filelock.TryLock.
 func TryLockFile(path string) (unlock func(), err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o666)
-	if err != nil {
-		return nil, err
-	}
-	if err := lockFile(f, false); err != nil {
-		f.Close()
-		return nil, &os.PathError{Op: "lock", Path: path, Err: err}
-	}
-	return releaser(f), nil
-}
-
-// releaser answers the function that lets go of f's lock and closes f.
-func releaser(f *os.File) func() {
-	return func() {
-		unlockFile(f)
-		f.Close()
-	}
+	return filelock.TryLock(path)
 }
