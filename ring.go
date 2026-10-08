@@ -39,7 +39,7 @@ const (
 )
 
 // ringHeader is the control block. It is mapped directly onto the
-// earliest HeaderSize bytes of the buffer, so field order and padding are
+// earliest HeaderSize bytes of the buffer. Field order and padding are
 // the wire format and must not change without a version bump.
 type ringHeader struct {
 	magic    uint64
@@ -193,7 +193,7 @@ func (r *Ring) casLength(idx uint64, old, v int32) bool {
 }
 
 // The type field is ordered by the release store and the acquire load of the
-// length beside it, so it needs no atomic of its own.
+// length beside it. It needs no atomic of its own.
 func (r *Ring) loadType(idx uint64) uint32 {
 	return *(*uint32)(unsafe.Pointer(&r.data[idx+4]))
 }

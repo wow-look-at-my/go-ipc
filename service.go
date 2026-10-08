@@ -193,8 +193,8 @@ func (s *Service) stop(err error) {
 }
 
 // adopt opens a client's channel and serves it. An open that fails means the
-// channel was adopted already, its client has gone, or the client has not
-// finished creating it and knocks when it has.
+// channel was adopted already, its client has gone. Otherwise, the client
+// has not finished creating it and knocks when it has.
 func (s *Service) adopt(id string) {
 	ch, err := OpenChannel(s.name + serviceClientPrefix + id)
 	if err != nil {

@@ -10,9 +10,9 @@ import (
 
 var payloadSizes = []int{16, 256, 4096}
 
-// A benchmark counts its failures rather than asserting inside the timed loop,
-// because an assertion helper measured per iteration would be reported as the
-// cost of the operation under test.
+// A benchmark counts its failures rather than asserting inside the timed loop.
+// This is because an assertion helper measured per iteration would be reported
+// as the cost of the operation under test.
 
 func BenchmarkRingWriteRead(b *testing.B) {
 	for _, size := range payloadSizes {

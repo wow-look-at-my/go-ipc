@@ -49,7 +49,7 @@ func lockName(name string) (*nameLock, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if err := lockFile(f, false); err != nil {
 			f.Close()
 			if errors.Is(err, unix.EWOULDBLOCK) {
 				return nil, fmt.Errorf("ipc: %q: %w", name, ErrInUse)

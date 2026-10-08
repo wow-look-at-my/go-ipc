@@ -2,9 +2,9 @@
 //
 // [Ring] is a lock-free multi-producer single-consumer buffer of
 // variable-length records inside a byte slice. [Event] is a named cross-process
-// wake primitive whose waiters park on the Go poller, so a blocked wait costs
-// no thread and honors a [context.Context]. [Queue], [Channel] and [Conn]
-// combine both into named endpoints with blocking sends and receives.
+// wake primitive whose waiters park on the Go poller. A blocked wait costs no
+// thread and honors a [context.Context]. [Queue], [Channel] and [Conn] combine
+// both into named endpoints with blocking sends and receives.
 //
 // An endpoint with work to do makes no system call. An endpoint that cannot
 // proceed parks on a kernel wait. Nothing spins. A process that dies holding

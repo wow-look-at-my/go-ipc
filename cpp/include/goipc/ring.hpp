@@ -544,8 +544,8 @@ private:
 		return -1;
 	}
 
-	// The slot records the cursor range before the claim takes it, so a
-	// reader stopped inside that range can always find the producer that is
+	// The slot records the cursor range before the claim takes it. A reader
+	// stopped inside that range can always find the producer that is
 	// responsible. It returns false when the ring is full, and leaves the
 	// record header holding the type and -total.
 	bool claim_record(int slot, std::uint32_t type, std::size_t len, std::byte *&rec, std::int32_t &total)

@@ -66,6 +66,11 @@ func runChild(role, name, count string) error {
 		return childRelease()
 	case "write-and-die":
 		return childWriteAndDie(name)
+	case "lock-file":
+		if _, err := LockFile(ctx, name); err != nil {
+			return err
+		}
+		return readyThenWait()
 	case "ident":
 		if _, err := fmt.Println(uint64(selfID())); err != nil {
 			return err
@@ -321,7 +326,7 @@ func TestCrossProcessQueue(t *testing.T) {
 }
 
 // TestCrossProcessConnRoundTrip pushes a payload larger than a single
-// message through the stream layer and back, so both the split on write
+// message through the stream layer and back. Both the split on write
 // and the reassembly on read cross a process boundary.
 func TestCrossProcessConnRoundTrip(t *testing.T) {
 	name := uniqueName(t)

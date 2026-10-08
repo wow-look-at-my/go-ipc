@@ -62,7 +62,7 @@ func TestAttachRingSeesInitializedRing(t *testing.T) {
 }
 
 // A claimed record whose header is not written yet must stop the reader, even
-// when the earlier lap left payload bytes there that look like a record.
+// when the earlier lap left payload bytes there. That look like a record.
 func TestReadIgnoresBytesLeftByAnEarlierLap(t *testing.T) {
 	r := newTestRing(t, MinCapacity)
 
@@ -249,7 +249,7 @@ func TestRingDetectsCorruptLength(t *testing.T) {
 
 // TestRingStaleHeadCacheDoesNotOverrun sets the state that a producer leaves
 // when a scheduler stops it between its load of head and its store into
-// headCache: a cached head more than a lap old, on a full ring.
+// headCache. A cached head more than a lap old, on a full ring.
 func TestRingStaleHeadCacheDoesNotOverrun(t *testing.T) {
 	r := newTestRing(t, MinCapacity)
 	payload := make([]byte, r.MaxMessageSize())

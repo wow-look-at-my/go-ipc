@@ -117,8 +117,8 @@ func openFIFO(path string) (*os.File, error) {
 }
 
 // dupFIFO gives a waiter a descriptor of its own on the FIFO. It duplicates
-// the write handle and does not open the path, because the creator can unlink
-// the path while this process still waits on the FIFO.
+// the write handle and does not open the path. This is because the creator
+// can unlink the path while this process still waits on the FIFO.
 func (e *eventImpl) dupFIFO() (*os.File, error) {
 	rc, err := e.write.SyscallConn()
 	if err != nil {

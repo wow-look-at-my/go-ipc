@@ -185,7 +185,7 @@ inline void futex_wake_all(std::uint32_t *addr) noexcept
 }
 
 // gate counts operations in flight so that a close can wait for them before
-// it releases memory they use. The top bit marks the gate closed, so a leaver
+// it releases memory they use. The top bit marks the gate closed. A leaver
 // reads that mark in the same atomic step as its decrement and touches no
 // other field afterwards.
 class gate {
