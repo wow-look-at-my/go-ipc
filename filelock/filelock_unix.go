@@ -1,6 +1,6 @@
 //go:build unix
 
-package ipc
+package filelock
 
 import (
 	"errors"
@@ -9,9 +9,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// lockFile takes f's exclusive flock. With wait it blocks in the kernel until
+// Take takes f's exclusive flock. With wait it blocks in the kernel until
 // the lock is granted. Without it a held lock fails at once with EWOULDBLOCK.
-func lockFile(f *os.File, wait bool) error {
+func Take(f *os.File, wait bool) error {
 	how := unix.LOCK_EX
 	if !wait {
 		how |= unix.LOCK_NB
@@ -24,6 +24,7 @@ func lockFile(f *os.File, wait bool) error {
 	}
 }
 
-func unlockFile(f *os.File) {
+// Release lets go of the lock Take took on f.
+func Release(f *os.File) {
 	unix.Flock(int(f.Fd()), unix.LOCK_UN)
 }
