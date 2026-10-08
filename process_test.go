@@ -66,6 +66,11 @@ func runChild(role, name, count string) error {
 		return childRelease()
 	case "write-and-die":
 		return childWriteAndDie(name)
+	case "lock-file":
+		if _, err := LockFile(ctx, name); err != nil {
+			return err
+		}
+		return readyThenWait()
 	case "ident":
 		if _, err := fmt.Println(uint64(selfID())); err != nil {
 			return err
