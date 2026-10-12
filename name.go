@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/wow-look-at-my/go-shm"
 )
@@ -43,7 +44,10 @@ func removeInstance(name, inc string) error {
 	inst := instanceName(name, inc)
 	var err error
 	if seg, openErr := shm.Open(inst); openErr == nil {
-		err = seg.Unlink()
+		// Another process can remove the segment between Open and Unlink.
+		if err = seg.Unlink(); errors.Is(err, fs.ErrNotExist) {
+			err = nil
+		}
 		seg.Close()
 	}
 	if uerr := unlinkEventImpl(inst + ".ne"); err == nil {
