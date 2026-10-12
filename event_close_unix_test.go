@@ -17,9 +17,7 @@ func TestOpenReaderAfterCloseIsErrClosed(t *testing.T) {
 	ev, err := CreateEvent(uniqueName(t))
 	require.NoError(t, err)
 	t.Cleanup(func() { ev.Unlink() })
-	if ev.impl.sock != nil {
-		t.Fatal("this test drives the FIFO backend, and this host chose the socket backend")
-	}
+	require.Nil(t, ev.impl.sock, "this test drives the FIFO backend, and this host chose the socket backend")
 
 	require.NoError(t, ev.Close())
 	_, err = ev.impl.openReader()
