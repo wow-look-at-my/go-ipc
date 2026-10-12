@@ -157,21 +157,27 @@ func (e *eventImpl) acquire() (*reader, error) {
 		return r, nil
 	}
 	e.mu.Unlock()
+	return e.openReader()
+}
 
+// openReader opens a new reader handle. Close can run while the handle is
+// duplicated, and the duplicate then fails on the closed write handle. That
+// failure is the event closing, so it reports ErrClosed.
+func (e *eventImpl) openReader() (*reader, error) {
 	f, err := e.dupFIFO()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		if f != nil {
+			f.Close()
+		}
+		return nil, ErrClosed
+	}
 	if err != nil {
 		return nil, err
 	}
 	r := newReader(f)
-
-	e.mu.Lock()
-	if e.closed {
-		e.mu.Unlock()
-		f.Close()
-		return nil, ErrClosed
-	}
 	e.open = append(e.open, r)
-	e.mu.Unlock()
 	return r, nil
 }
 
