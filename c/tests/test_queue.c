@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -57,12 +58,12 @@ TEST(queue_create_lays_out_an_instance, 0)
 	char inc[GOIPC_INC_LEN + 1];
 	REQUIRE_RC(goipc__read_name(name, inc), GOIPC_OK);
 	REQUIRE(strlen(inc) == 16 && strspn(inc, "0123456789abcdef") == 16, "inc %s", inc);
-	char namefile[160], incfile[160], seg[160], ne[160], nf[160];
-	snprintf(namefile, sizeof namefile, "/dev/shm/go-ipc-%s.name", name);
-	snprintf(incfile, sizeof incfile, "/dev/shm/go-ipc-%s.inc", name);
-	snprintf(seg, sizeof seg, "/dev/shm/go-shm-%s.%s", name, inc);
-	snprintf(ne, sizeof ne, "/dev/shm/go-ipc-%s.%s.ne.event", name, inc);
-	snprintf(nf, sizeof nf, "/dev/shm/go-ipc-%s.%s.nf.event", name, inc);
+	char namefile[PATH_MAX], incfile[PATH_MAX], seg[PATH_MAX], ne[PATH_MAX], nf[PATH_MAX];
+	runtime_file(namefile, sizeof namefile, "go-ipc-%s.name", name);
+	runtime_file(incfile, sizeof incfile, "go-ipc-%s.inc", name);
+	runtime_file(seg, sizeof seg, "go-shm-%s.%s", name, inc);
+	runtime_file(ne, sizeof ne, "go-ipc-%s.%s.ne.event", name, inc);
+	runtime_file(nf, sizeof nf, "go-ipc-%s.%s.nf.event", name, inc);
 	struct stat st;
 	REQUIRE(stat(namefile, &st) == 0);
 	CHECK(S_ISREG(st.st_mode) && (st.st_mode & 0077) == 0, "mode %o", st.st_mode & 0777);
