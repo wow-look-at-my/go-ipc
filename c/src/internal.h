@@ -2,6 +2,7 @@
 #ifndef GOIPC_INTERNAL_H
 #define GOIPC_INTERNAL_H
 
+#include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -17,7 +18,6 @@
 #define GOIPC_CACHE_LINE 128u
 #define GOIPC_RECORD_ALIGNMENT 8u
 #define GOIPC_SIGNAL_MAX_TOKENS 4096
-#define GOIPC_SHM_DIR "/dev/shm"
 #define GOIPC_SEGMENT_PREFIX "go-shm-"
 #define GOIPC_EVENT_PREFIX "go-ipc-"
 #define GOIPC_EVENT_SUFFIX ".event"
@@ -94,8 +94,25 @@ int goipc__sys_errno(int e);
 int goipc__validate_name(const char *name);
 /* goipc__join returns a malloc copy of a, b and c joined, or NULL. */
 char *goipc__join(const char *a, const char *b, const char *c);
+/* goipc__runtime_path returns a malloc copy of "<runtime dir>/<prefix><name><suffix>", or NULL. */
+char *goipc__runtime_path(const char *prefix, const char *name, const char *suffix);
 char *goipc__segment_path(const char *name);
 char *goipc__event_path(const char *name);
+
+/* ---- sys.c: the system calls that Linux and macOS spell differently ---- */
+
+/* goipc__random fills buf from the kernel's random source. */
+int goipc__random(void *buf, size_t len);
+/* goipc__pipe makes a pipe with both ends close-on-exec and non-blocking. */
+int goipc__pipe(int fd[2]);
+/* goipc__socket makes a close-on-exec AF_UNIX stream socket, non-blocking when asked. */
+int goipc__socket(bool nonblock);
+/* goipc__accept accepts a close-on-exec, non-blocking connection. */
+int goipc__accept(int listen_fd);
+/* goipc__dup_cloexec makes to a close-on-exec copy of from, as dup3 does. It is safe in the child of a fork. */
+int goipc__dup_cloexec(int from, int to);
+/* goipc__poll is poll with an absolute CLOCK_MONOTONIC deadline, or no deadline when it is NULL. */
+int goipc__poll(struct pollfd *fds, nfds_t nfds, const struct timespec *deadline);
 
 /* goipc__deadline turns a relative timeout into an absolute CLOCK_MONOTONIC time. */
 const struct timespec *goipc__deadline(int64_t timeout_ns, struct timespec *out);

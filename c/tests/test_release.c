@@ -54,10 +54,16 @@ static int dial_path(const char *path)
 	struct sockaddr_un addr = {.sun_family = AF_UNIX};
 	REQUIRE(strlen(path) < sizeof addr.sun_path);
 	strcpy(addr.sun_path, path);
-	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	int fd = goipc__socket(false);
 	REQUIRE(fd >= 0);
 	REQUIRE(connect(fd, (struct sockaddr *)&addr, sizeof addr) == 0, "connect %s: %s", path, strerror(errno));
 	return fd;
+}
+
+static void cloexec_pipe(int fds[2])
+{
+	REQUIRE(pipe(fds) == 0);
+	REQUIRE(fcntl(fds[0], F_SETFD, FD_CLOEXEC) == 0 && fcntl(fds[1], F_SETFD, FD_CLOEXEC) == 0);
 }
 
 static void on_exit_fn(void *arg, uint64_t id, int err)
@@ -71,7 +77,9 @@ static void on_exit_fn(void *arg, uint64_t id, int err)
 TEST(release_removes_the_life_socket_and_keeps_watches, T_FORK)
 {
 	int to_child[2], from_child[2], fired[2];
-	REQUIRE(pipe2(to_child, O_CLOEXEC) == 0 && pipe2(from_child, O_CLOEXEC) == 0 && pipe2(fired, O_CLOEXEC) == 0);
+	cloexec_pipe(to_child);
+	cloexec_pipe(from_child);
+	cloexec_pipe(fired);
 	pid_t pid = fork();
 	REQUIRE(pid >= 0);
 	if (pid == 0) {

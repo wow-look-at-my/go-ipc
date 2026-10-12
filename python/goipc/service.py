@@ -25,7 +25,7 @@ import threading
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from . import wire
-from ._endpoints import Channel, Queue
+from ._endpoints import Channel, Queue, runtime_dir
 from ._util import Endpoint
 from .errors import CallError, Closed, Corrupt, IpcError, PeerGone, ReservedType
 
@@ -57,7 +57,7 @@ def scan_clients(name: str) -> list:
 	prefix = "go-ipc-" + name + wire.SERVICE_CLIENT_PREFIX
 	suffix = wire.OPENER_TO_CREATOR_SUFFIX + ".name"
 	try:
-		entries = os.listdir(wire.RUNTIME_DIR)
+		entries = os.listdir(runtime_dir())
 	except OSError:
 		return []
 	out = []
