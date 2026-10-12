@@ -7,9 +7,7 @@ import (
 )
 
 // runtimeDir holds the FIFOs that back named events, and the sockets that
-// track live processes. macOS has no /dev/shm, and the go command's tests
-// fail on any file left in TMPDIR, so the tree gets a directory of its own
-// under the user cache instead of the shared temporary directory.
+// track live processes. macOS has no /dev/shm.
 func runtimeDir() string {
 	dirOnce.Do(func() {
 		base, err := os.UserCacheDir()
