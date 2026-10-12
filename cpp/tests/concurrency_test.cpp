@@ -227,7 +227,8 @@ TEST(Concurrency, CloseReleasesBlockedRecvAndSend)
 	r.join();
 	s.join();
 	EXPECT_EQ(recv_err, static_cast<int>(errc::closed));
-	EXPECT_EQ(send_err, static_cast<int>(errc::closed));
+	// Close clears the consumer before it closes the events, so the sender can wake to find the receiver gone.
+	EXPECT_TRUE(send_err == static_cast<int>(errc::closed) || send_err == static_cast<int>(errc::peer_gone)) << send_err;
 }
 
 TEST(Concurrency, CloseWhileSendersRun)
