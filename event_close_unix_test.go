@@ -10,11 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOpenReaderAfterCloseIsErrClosed opens a reader handle on an event that
-// closed after acquire found it open. That is the order a first wait and a
-// Close race into. The duplicate fails on the closed write handle, and the
-// wait must report ErrClosed, not the raw closed-file error. A host on the
-// socket backend has no reader handle, so its wait answers the same contract.
+// A wait that races Close reports ErrClosed on either backend.
 func TestOpenReaderAfterCloseIsErrClosed(t *testing.T) {
 	ev, err := CreateEvent(uniqueName(t))
 	require.NoError(t, err)
