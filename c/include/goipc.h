@@ -74,6 +74,11 @@ const char *goipc_strerror(int err);
 /* goipc_last_errno returns the errno of the latest GOIPC_ESYS on this thread. */
 int goipc_last_errno(void);
 
+/* goipc_runtime_dir returns the directory that holds every file of this
+ * library: /dev/shm on Linux, and $TMPDIR (or /tmp) on macOS. The string is
+ * static and never changes within a process. */
+const char *goipc_runtime_dir(void);
+
 /* goipc_release removes the life socket of this process. Call it only just
  * before the process exits, after every endpoint is closed. A peer that
  * already watches this process keeps its connection until the exit. A later
