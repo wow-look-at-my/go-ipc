@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/wow-look-at-my/go-shm"
 )
@@ -34,6 +35,16 @@ func parseIncarnation(content []byte) (string, bool) {
 
 func instanceName(name, inc string) string { return name + "." + inc }
 
+// unlinkOpened removes an open segment's name. Both ends of a channel remove
+// it when one goes, so the other end can unlink it after this open.
+func unlinkOpened(seg *shm.SharedMemory) error {
+	err := seg.Unlink()
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 // errNotReady reports a name file that exists but names no instance yet.
 var errNotReady = errors.New("ipc: endpoint is not ready")
 
@@ -43,7 +54,7 @@ func removeInstance(name, inc string) error {
 	inst := instanceName(name, inc)
 	var err error
 	if seg, openErr := shm.Open(inst); openErr == nil {
-		err = seg.Unlink()
+		err = unlinkOpened(seg)
 		seg.Close()
 	}
 	if uerr := unlinkEventImpl(inst + ".ne"); err == nil {
