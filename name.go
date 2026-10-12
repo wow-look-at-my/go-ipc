@@ -54,7 +54,7 @@ func removeInstance(name, inc string) error {
 	inst := instanceName(name, inc)
 	var err error
 	if seg, openErr := shm.Open(inst); openErr == nil {
-		err = unlinkOpened(seg)
+		err = unlinkSegment(seg)
 		seg.Close()
 	}
 	if uerr := unlinkEventImpl(inst + ".ne"); err == nil {
@@ -65,6 +65,15 @@ func removeInstance(name, inc string) error {
 	}
 	if err != nil {
 		return fmt.Errorf("ipc: remove %q: %w", inst, err)
+	}
+	return nil
+}
+
+// unlinkSegment removes the segment's name. Another process that removes the
+// same instance can unlink it between the open and this call.
+func unlinkSegment(seg *shm.SharedMemory) error {
+	if err := seg.Unlink(); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return nil
 }
