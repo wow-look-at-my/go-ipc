@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -297,15 +298,17 @@ static void handle_reserved(void *ctx, goipc_session *s, uint32_t type, const ui
 	(void)type;
 	(void)payload;
 	(void)len;
-	int *rc = ctx;
-	*rc = goipc_reply_set(reply, GOIPC_SERVICE_TYPE_HELLO, NULL, 0);
+	atomic_int *rc = ctx;
+	atomic_store(rc, goipc_reply_set(reply, GOIPC_SERVICE_TYPE_HELLO, NULL, 0));
 }
 
 TEST(service_handler_cannot_reply_with_a_reserved_type, T_THREADS)
 {
 	char name[96];
 	unique_name(name, sizeof name, "svcr");
-	int set_rc = GOIPC_OK;
+	/* The reply crosses a second mapping of the ring, so TSan sees no order
+	 * between the handler's write and this read. The atomic gives it one. */
+	atomic_int set_rc = GOIPC_OK;
 	goipc_service *svc;
 	REQUIRE_RC(goipc_service_serve(name, 4096, handle_reserved, NULL, &set_rc, &svc), GOIPC_OK);
 	goipc_client *c = connect_to(name);
@@ -314,7 +317,7 @@ TEST(service_handler_cannot_reply_with_a_reserved_type, T_THREADS)
 	size_t len;
 	CHECK_RC(goipc_client_call(c, T_ECHO, "x", 1, MS(5000), &type, reply, sizeof reply, &len), GOIPC_ECALL);
 	CHECK(len == 31 && memcmp(reply, "goipc: the handler set no reply", 31) == 0, "error %.*s", (int)len, reply);
-	CHECK_RC(set_rc, GOIPC_ERESERVED);
+	CHECK_RC(atomic_load(&set_rc), GOIPC_ERESERVED);
 	goipc_client_destroy(c);
 	goipc_service_destroy(svc);
 }
