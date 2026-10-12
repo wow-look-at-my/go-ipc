@@ -76,9 +76,9 @@ q.unlink()
 
 def _consumer(name: str) -> int:
 	"""Reads the consumer field of the queue's ring from its segment."""
-	with open("/dev/shm/go-ipc-%s.inc" % name) as f:
+	with open(support.host_path(goipc.wire.INSTANCE_FILE_PATH.format(name=name))) as f:
 		inc = f.read()
-	with open("/dev/shm/go-shm-%s.%s" % (name, inc), "rb") as f:
+	with open(support.host_path(goipc.wire.SEGMENT_PATH.format(name=name, id=inc)), "rb") as f:
 		f.seek(24)
 		return int(struct.unpack("<Q", f.read(8))[0])
 
@@ -345,6 +345,15 @@ class QueueTest(Named):
 		with self.assertRaises(goipc.Empty):
 			q.try_recv()
 
+	def test_files_live_in_the_runtime_dir(self) -> None:
+		q = self.queue("qd")
+		d = goipc.runtime_dir()
+		self.assertTrue(os.path.isabs(d) and not d.endswith("/"), d)
+		if os.path.isdir("/dev/shm"):
+			self.assertEqual(d, goipc.wire.RUNTIME_DIR)
+		path = support.host_path(goipc.wire.NAME_FILE_PATH.format(name=q.name))
+		self.assertTrue(os.path.isfile(path), path)
+
 	def test_open_shares_the_ring(self) -> None:
 		q = self.queue("qo")
 		sender = goipc.Queue.open(q.name)
@@ -610,7 +619,7 @@ class PeerTest(Named):
 
 	def test_not_ready_name(self) -> None:
 		name = support.unique_name("nr")
-		path = goipc.wire.NAME_FILE_PATH.format(name=name)
+		path = support.host_path(goipc.wire.NAME_FILE_PATH.format(name=name))
 		# The lock stands for a create in progress and keeps a sweep off the file.
 		fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
 		self.addCleanup(os.unlink, path)
@@ -960,7 +969,7 @@ class ProcessTest(Named):
 		assert child.stdin is not None and child.stdout is not None
 		self.addCleanup(child.stdout.close)
 		self.assertEqual(child.stdout.readline(), b"ready\n")
-		life = "/dev/shm/go-ipc-life-%016x.sock" % _consumer(name)
+		life = support.host_path(goipc.wire.LIFE_SOCKET_PATH.format(procid="%016x" % _consumer(name)))
 		self.assertTrue(os.path.exists(life), life)
 
 		# The first send starts a watch on the child before the release.

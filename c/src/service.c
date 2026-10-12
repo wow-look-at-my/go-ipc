@@ -281,7 +281,7 @@ static void scan_clients(goipc_service *s)
 	size_t plen = strlen(prefix);
 	static const char suffix[] = GOIPC_O2C_SUFFIX GOIPC_NAME_SUFFIX;
 	size_t slen = sizeof suffix - 1;
-	DIR *d = opendir(GOIPC_SHM_DIR);
+	DIR *d = opendir(goipc_runtime_dir());
 	if (d == NULL) {
 		free(prefix);
 		return;
