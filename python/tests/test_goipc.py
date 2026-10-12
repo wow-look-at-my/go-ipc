@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import array
 import errno
 import fcntl
 import io
 import os
+import resource
 import struct
+import subprocess
+import sys
 import threading
 import time
 import unittest
 from typing import Any, List, Tuple
 
 import goipc
-from goipc.peer import pattern
+from goipc import service
+from goipc.peer import SERVICE_ECHO, SERVICE_ECHOED, SERVICE_FAIL, SERVICE_WHO, SERVICE_WHOAMI, pattern
 
 import support
 
@@ -52,6 +57,30 @@ def needs_slot_api(case: dict) -> bool:
 SLOT_CASES = {"slots", "slot_wrap"}
 
 RING_BYTES = goipc.HEADER_SIZE + 4096
+
+# The release child creates a queue, releases on its first stdin line, and exits at stdin end-of-file.
+_RELEASE_CHILD = """
+import sys
+import goipc
+goipc.release()
+q = goipc.Queue.create(sys.argv[1], int(sys.argv[2]))
+print("ready", flush=True)
+sys.stdin.readline()
+goipc.release()
+goipc.release()
+print("released", flush=True)
+sys.stdin.read()
+q.unlink()
+"""
+
+
+def _consumer(name: str) -> int:
+	"""Reads the consumer field of the queue's ring from its segment."""
+	with open(support.host_path(goipc.wire.INSTANCE_FILE_PATH.format(name=name))) as f:
+		inc = f.read()
+	with open(support.host_path(goipc.wire.SEGMENT_PATH.format(name=name, id=inc)), "rb") as f:
+		f.seek(24)
+		return int(struct.unpack("<Q", f.read(8))[0])
 
 
 class VectorTest(unittest.TestCase):
@@ -900,7 +929,7 @@ class ProcessTest(Named):
 
 	def test_receiver_gone_cell(self) -> None:
 		k = 300
-		for mode in ("close", "exit"):
+		for mode in ("close", "exit", "release"):
 			with self.subTest(mode=mode):
 				name = support.unique_name("rg")
 				recv = support.Peer("recv-then-stop", name, k, CAP, mode)
@@ -927,6 +956,43 @@ class ProcessTest(Named):
 			while True:
 				q.send(b"after", timeout=support.BOUND)
 
+	def test_release_removes_the_life_socket_and_keeps_watches(self) -> None:
+		name = support.unique_name("rel")
+		child = subprocess.Popen(
+			[sys.executable, "-c", _RELEASE_CHILD, name, str(CAP)],
+			stdin=subprocess.PIPE,
+			stdout=subprocess.PIPE,
+			env=support.env(),
+		)
+		self.addCleanup(child.wait, support.BOUND)
+		self.addCleanup(child.kill)
+		assert child.stdin is not None and child.stdout is not None
+		self.addCleanup(child.stdout.close)
+		self.assertEqual(child.stdout.readline(), b"ready\n")
+		life = support.host_path(goipc.wire.LIFE_SOCKET_PATH.format(procid="%016x" % _consumer(name)))
+		self.assertTrue(os.path.exists(life), life)
+
+		# The first send starts a watch on the child before the release.
+		q = goipc.Queue.open(name)
+		self.addCleanup(q.close)
+		q.send(b"before", timeout=support.BOUND)
+
+		child.stdin.write(b"release\n")
+		child.stdin.flush()
+		self.assertEqual(child.stdout.readline(), b"released\n")
+		self.assertFalse(os.path.exists(life), "the life socket is still there after release")
+		# A new handle checks afresh and judges the child gone.
+		with self.assertRaises(goipc.PeerGone):
+			goipc.Queue.open(name)
+		# The child still lives, and the earlier watch still says so.
+		q.send(b"after", timeout=support.BOUND)
+
+		child.stdin.close()
+		self.assertEqual(child.wait(support.BOUND), 0)
+		with self.assertRaises(goipc.PeerGone):
+			while True:
+				q.send(b"gone", timeout=support.BOUND)
+
 	def test_second_creator_is_in_use_while_the_first_process_lives(self) -> None:
 		name = support.unique_name("iu2")
 		recv = support.Peer("recv", name, 1, CAP)
@@ -944,7 +1010,7 @@ class ProcessTest(Named):
 
 	def test_channel_peer_gone_cell(self) -> None:
 		k = 300
-		for mode in ("close", "exit"):
+		for mode in ("close", "exit", "release"):
 			with self.subTest(mode=mode):
 				name = support.unique_name("cpg")
 				recv = support.Peer("chan-recv-until-gone", name, CAP, k)
@@ -954,7 +1020,7 @@ class ProcessTest(Named):
 
 	def test_channel_peer_exit_is_peer_gone_after_the_last_message(self) -> None:
 		k = 40
-		for mode in ("close", "exit"):
+		for mode in ("close", "exit", "release"):
 			with self.subTest(mode=mode):
 				name = support.unique_name("cpg2")
 				c = goipc.Channel.create(name, CAP)
@@ -989,3 +1055,238 @@ class ProcessTest(Named):
 				p = support.Peer(*args)
 				p.finish(self, want_code=1)
 				self.assertTrue(p.last_stderr.strip(), "a failing peer must say why")
+
+
+PARK, PARKED = 6, 7
+
+
+class ParkingService:
+	"""Answers echo, fail and who, parks a park call until release is set, and records who goes."""
+
+	def __init__(self) -> None:
+		self.release = threading.Event()
+		self.gone: List[int] = []
+		self.gone_event = threading.Event()
+
+	def handle(self, session: service.Session, type_: int, payload: bytes) -> Tuple[int, bytes]:
+		if type_ == SERVICE_ECHO:
+			return SERVICE_ECHOED, payload
+		if type_ == SERVICE_FAIL:
+			raise RuntimeError(payload.decode("utf-8"))
+		if type_ == SERVICE_WHO:
+			return SERVICE_WHOAMI, struct.pack("<Q", session.ordinal)
+		if type_ == PARK:
+			self.release.wait()
+			return PARKED, b""
+		raise ValueError("type %d is not a request" % type_)
+
+	def on_gone(self, session: service.Session) -> None:
+		self.gone.append(session.ordinal)
+		self.gone_event.set()
+
+
+def cpu_time() -> float:
+	usage = resource.getrusage(resource.RUSAGE_SELF)
+	return usage.ru_utime + usage.ru_stime
+
+
+def echo(session: service.Session, type_: int, payload: bytes) -> Tuple[int, bytes]:
+	return SERVICE_ECHOED, payload
+
+
+class ServiceTest(unittest.TestCase):
+	def serve(self, name: str) -> Tuple[service.Service, ParkingService]:
+		h = ParkingService()
+		svc = service.serve(name, h.handle, on_gone=h.on_gone, capacity=goipc.MIN_CAPACITY)
+		self.addCleanup(svc.close)
+		return svc, h
+
+	def connect(self, name: str) -> service.Client:
+		client = service.connect(name, timeout=support.BOUND, capacity=goipc.MIN_CAPACITY)
+		self.addCleanup(client.close)
+		return client
+
+	def connect_early(self, name: str) -> support.Worker:
+		"""Starts a connect to a service that does not exist and returns once its channel is in place."""
+		worker = support.start(lambda: service.connect(name, timeout=support.BOUND, capacity=goipc.MIN_CAPACITY), "early connect")
+		support.wait_until(self, lambda: bool(service.scan_clients(name)), "the client never created its channel")
+		return worker
+
+	def wait_parked(self, client: service.Client) -> None:
+		support.wait_until(self, lambda: client._channel.rx.ring.header_field("recv_waiters") == 1, "the call never parked")
+
+	def test_answers_calls(self) -> None:
+		name = support.unique_name("svc")
+		self.serve(name)
+		client = self.connect(name)
+		for i in range(100):
+			self.assertEqual(client.call(SERVICE_ECHO, str(i).encode()), (SERVICE_ECHOED, str(i).encode()))
+		with self.assertRaises(service.CallError) as cm:
+			client.call(SERVICE_FAIL, b"boom")
+		self.assertEqual(str(cm.exception), "boom")
+		self.assertEqual(client.call(SERVICE_WHO), (SERVICE_WHOAMI, struct.pack("<Q", client.ordinal)))
+
+	def test_each_client_gets_an_ordinal(self) -> None:
+		name = support.unique_name("ordinal")
+		self.serve(name)
+		seen = set()
+		for _ in range(4):
+			client = self.connect(name)
+			self.assertEqual(client.call(SERVICE_WHO), (SERVICE_WHOAMI, struct.pack("<Q", client.ordinal)))
+			self.assertNotIn(client.ordinal, seen)
+			seen.add(client.ordinal)
+
+	def test_clients_run_independently(self) -> None:
+		name = support.unique_name("independent")
+		_, h = self.serve(name)
+		parked = self.connect(name)
+		worker = support.start(lambda: parked.call(PARK), "parked call")
+		other = self.connect(name)
+		self.assertEqual(other.call(SERVICE_ECHO, b"free"), (SERVICE_ECHOED, b"free"))
+		h.release.set()
+		self.assertEqual(worker.finish(self), (PARKED, b""))
+
+	def test_client_waits_for_the_service(self) -> None:
+		name = support.unique_name("early")
+		worker = self.connect_early(name)
+		self.serve(name)
+		client = worker.finish(self)
+		self.addCleanup(client.close)
+		self.assertEqual(client.call(SERVICE_ECHO, b"early"), (SERVICE_ECHOED, b"early"))
+
+	def test_reports_a_client_that_closes(self) -> None:
+		name = support.unique_name("closes")
+		_, h = self.serve(name)
+		client = service.connect(name, timeout=support.BOUND, capacity=goipc.MIN_CAPACITY)
+		ordinal = client.ordinal
+		client.close()
+		self.assertTrue(h.gone_event.wait(support.BOUND), "the handler was not told that the client went")
+		self.assertEqual(h.gone, [ordinal])
+
+	def test_reports_a_client_that_exits(self) -> None:
+		name = support.unique_name("exits")
+		_, h = self.serve(name)
+		peer = support.Peer("service-call", name, 3, "exit")
+		self.assertEqual(peer.finish(self), ["ok 3"])
+		self.assertTrue(h.gone_event.wait(support.BOUND), "the handler was not told that the client exited")
+		self.assertEqual(h.gone, [0])
+		support.wait_until(self, lambda: not service.scan_clients(name), "the service must unlink a dead client's channel")
+
+	def test_close_fails_every_call(self) -> None:
+		name = support.unique_name("close")
+		svc, _ = self.serve(name)
+		client = self.connect(name)
+		worker = support.start(lambda: client.call(PARK), "parked call")
+		self.wait_parked(client)
+		svc.close()
+		self.assertIsInstance(worker.finish_error(self), goipc.PeerGone)
+		with self.assertRaises(goipc.PeerGone):
+			client.call(SERVICE_ECHO)
+		svc.wait(support.BOUND)
+		service.serve(name, echo).close()
+
+	def test_name_is_held_while_it_runs(self) -> None:
+		name = support.unique_name("inuse")
+		self.serve(name)
+		with self.assertRaises(goipc.InUse):
+			service.serve(name, echo)
+
+	def test_discards_a_stale_reply(self) -> None:
+		name = support.unique_name("stale")
+		_, h = self.serve(name)
+		client = self.connect(name)
+		with self.assertRaises(goipc.Timeout):
+			client.call(PARK, timeout=0.05)
+		h.release.set()
+		self.assertEqual(client.call(SERVICE_ECHO, b"after"), (SERVICE_ECHOED, b"after"))
+
+	def test_rejects_reserved_types(self) -> None:
+		name = support.unique_name("reserved")
+		self.serve(name)
+		client = self.connect(name)
+		with self.assertRaises(goipc.ReservedType):
+			client.call(goipc.wire.SERVICE_TYPE_KNOCK)
+		with self.assertRaises(goipc.ReservedType):
+			client.call(goipc.TYPE_PADDING)
+
+	def test_rejects_an_oversized_call(self) -> None:
+		name = support.unique_name("oversized")
+		self.serve(name)
+		client = self.connect(name)
+		with self.assertRaises(goipc.MessageTooLarge):
+			client.call(SERVICE_ECHO, bytes(client.max_payload_size + 1))
+		type_, reply = client.call(SERVICE_ECHO, bytes(client.max_payload_size))
+		self.assertEqual(type_, SERVICE_ECHOED)
+		self.assertEqual(len(reply), client.max_payload_size)
+
+	def test_carries_a_whole_prompt(self) -> None:
+		"""A prompt's token array travels in one call, so the channel is sized for one."""
+		name = support.unique_name("prompt")
+		svc = service.serve(name, echo)
+		self.addCleanup(svc.close)
+		client = service.connect(name, timeout=support.BOUND, capacity=1 << 21)
+		self.addCleanup(client.close)
+		tokens = array.array("i", range(1 << 17))
+		type_, reply = client.call(SERVICE_ECHO, tokens.tobytes())
+		self.assertEqual(type_, SERVICE_ECHOED)
+		self.assertEqual(reply, tokens.tobytes())
+
+	def test_the_default_capacity_holds_a_whole_prompt(self) -> None:
+		"""The default a caller gets with no capacity named still carries a whole prompt."""
+		payload = goipc.wire.max_message_size(service.SERVICE_CAPACITY)
+		self.assertGreaterEqual(payload, 4 * (1 << 17))
+
+	def test_rejects_a_bad_name(self) -> None:
+		with self.assertRaises(goipc.InvalidName):
+			service.serve("no/slashes", echo)
+		with self.assertRaises(goipc.InvalidName):
+			service.connect("no/slashes")
+
+	def test_connect_gives_up_with_its_timeout(self) -> None:
+		name = support.unique_name("giveup")
+		with self.assertRaises(goipc.Timeout):
+			service.connect(name, timeout=0.05, capacity=goipc.MIN_CAPACITY)
+		self.assertEqual(service.scan_clients(name), [], "a client that gives up must unlink its channel")
+
+	def test_typed_calls(self) -> None:
+		import demo
+
+		name = support.unique_name("typed")
+
+		def handle(session: service.Session, type_: int, payload: bytes) -> Tuple[int, bytes]:
+			req = demo.MESSAGES[type_].decode(payload)
+			if req.x == 0:
+				raise ValueError("zero")
+			return demo.Vec2.TYPE_ID, demo.Vec2(x=req.x + 1, y=req.y).encode()
+
+		svc = service.serve(name, handle, capacity=goipc.MIN_CAPACITY)
+		self.addCleanup(svc.close)
+		client = service.connect(name, timeout=support.BOUND, capacity=goipc.MIN_CAPACITY, messages=demo.MESSAGES)
+		self.addCleanup(client.close)
+		self.assertEqual(client.call_typed(demo.Vec2(x=1.5, y=2.0)), demo.Vec2(x=2.5, y=2.0))
+		with self.assertRaises(service.CallError) as cm:
+			client.call_typed(demo.Vec2(x=0.0, y=0.0))
+		self.assertEqual(str(cm.exception), "zero")
+		with self.assertRaises(TypeError):
+			self.connect(name).call_typed(demo.Vec2())
+
+	def test_parked_call_consumes_no_cpu(self) -> None:
+		window = 0.3
+		name = support.unique_name("nocpu")
+		_, h = self.serve(name)
+		parked = self.connect(name)
+		worker = support.start(lambda: parked.call(PARK), "parked call")
+		self.wait_parked(parked)
+		early_name = support.unique_name("nocpu-early")
+		early = self.connect_early(early_name)
+
+		before = cpu_time()
+		time.sleep(window)
+		spent = cpu_time() - before
+		self.assertLess(spent, window / 10, "parked calls burned %g s of CPU across a %g s window: something is spinning" % (spent, window))
+
+		h.release.set()
+		self.assertEqual(worker.finish(self), (PARKED, b""))
+		svc = service.serve(early_name, h.handle, capacity=goipc.MIN_CAPACITY)
+		self.addCleanup(svc.close)
+		early.finish(self).close()

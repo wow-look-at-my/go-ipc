@@ -60,6 +60,17 @@ func runChild(role, name, count string) error {
 		return childConsumer(name)
 	case "peer":
 		return childPeer(ctx, name)
+	case "service-client":
+		return childServiceClient(ctx, name)
+	case "release":
+		return childRelease()
+	case "write-and-die":
+		return childWriteAndDie(name)
+	case "lock-file":
+		if _, err := LockFile(ctx, name); err != nil {
+			return err
+		}
+		return readyThenWait()
 	case "ident":
 		if _, err := fmt.Println(uint64(selfID())); err != nil {
 			return err
@@ -148,6 +159,40 @@ func childPeer(ctx context.Context, name string) error {
 		return err
 	}
 	if err := readyThenWait(); err != nil {
+		return err
+	}
+	os.Exit(0)
+	return nil
+}
+
+// childServiceClient connects to a service, makes one call, and waits. When
+// its stdin closes it exits without a Close.
+func childServiceClient(ctx context.Context, name string) error {
+	c, err := Connect(ctx, name, WithCapacity(MinCapacity))
+	if err != nil {
+		return err
+	}
+	if _, _, err := c.Call(ctx, testEcho, []byte("hi")); err != nil {
+		return err
+	}
+	if err := readyThenWait(); err != nil {
+		return err
+	}
+	os.Exit(0)
+	return nil
+}
+
+// childWriteAndDie creates a channel and, when stdin closes, writes one
+// message that wakes nobody and exits without a close.
+func childWriteAndDie(name string) error {
+	ch, err := CreateChannel(name, WithCapacity(MinCapacity))
+	if err != nil {
+		return err
+	}
+	if err := readyThenWait(); err != nil {
+		return err
+	}
+	if err := ch.Tx().Ring().TryWrite(0, []byte("last")); err != nil {
 		return err
 	}
 	os.Exit(0)
@@ -281,7 +326,7 @@ func TestCrossProcessQueue(t *testing.T) {
 }
 
 // TestCrossProcessConnRoundTrip pushes a payload larger than a single
-// message through the stream layer and back, so both the split on write
+// message through the stream layer and back. Both the split on write
 // and the reassembly on read cross a process boundary.
 func TestCrossProcessConnRoundTrip(t *testing.T) {
 	name := uniqueName(t)
@@ -335,8 +380,7 @@ func TestCrossProcessConnEOF(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ping", string(got))
 
-	// Closing this side ends the child's io.Copy, and the child's own Close
-	// then sends the end-of-stream marker back.
+	// Closing this side ends the child's io.Copy, and the child's own Close then sends the end-of-stream marker back.
 	require.NoError(t, conn.Close())
 	require.NoError(t, child.Wait())
 }

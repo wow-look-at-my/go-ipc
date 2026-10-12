@@ -18,6 +18,7 @@ type goGen struct {
 func genGo(s *schema.Schema) ([]byte, error) {
 	g := &goGen{pkg: s.Package}
 	g.helpers()
+	g.registry(s)
 	for _, m := range s.Messages {
 		g.message(m)
 	}
@@ -83,6 +84,32 @@ func (g *goGen) helpers() {
 	g.useBinary = true
 }
 
+// registry writes the Message interface and NewMessage, which maps a type ID
+// to an empty message.
+func (g *goGen) registry(s *schema.Schema) {
+	w := &g.w
+	w.line("")
+	w.line("// Message is any message of package %s.", g.pkg)
+	w.line("type Message interface {")
+	w.line("\tTypeID() uint32")
+	w.line("\tSize() int")
+	w.line("\tMarshalTo(b []byte) int")
+	w.line("\tMarshalBinary() ([]byte, error)")
+	w.line("\tUnmarshalBinary(b []byte) error")
+	w.line("}")
+	w.line("")
+	w.line("// NewMessage returns an empty message with the type ID, or nil for a type ID no message has.")
+	w.line("func NewMessage(typeID uint32) Message {")
+	w.line("\tswitch typeID {")
+	for _, m := range s.Messages {
+		w.line("\tcase %sType:", m.Name)
+		w.line("\t\treturn &%s{}", m.Name)
+	}
+	w.line("\t}")
+	w.line("\treturn nil")
+	w.line("}")
+}
+
 func goType(t *schema.Type) string {
 	switch t.Kind {
 	case schema.Array:
@@ -125,6 +152,9 @@ func (g *goGen) message(m *schema.Message) {
 	w.line("")
 	w.line("// %sType is the type ID of %s.", m.Name, m.Name)
 	w.line("const %sType uint32 = %d", m.Name, m.ID)
+	w.line("")
+	w.line("// TypeID returns %sType.", m.Name)
+	w.line("func (m *%s) TypeID() uint32 { return %sType }", m.Name, m.Name)
 	g.size(m)
 	g.marshal(m)
 	g.unmarshal(m)

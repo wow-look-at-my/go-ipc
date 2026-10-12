@@ -81,6 +81,17 @@ type wireSpec struct {
 		TypeData uint32 `json:"type_data"`
 		TypeEOF  uint32 `json:"type_eof"`
 	} `json:"conn"`
+	Service struct {
+		RegistrySuffix  string `json:"registry_suffix"`
+		ClientPrefix    string `json:"client_prefix"`
+		ClientIDDigits  int    `json:"client_id_hex_digits"`
+		ReservedTypeMin uint32 `json:"reserved_type_min"`
+		TypeKnock       uint32 `json:"type_knock"`
+		TypeHello       uint32 `json:"type_hello"`
+		TypeError       uint32 `json:"type_error"`
+		SequenceSize    int    `json:"sequence_size"`
+		FirstSequence   uint64 `json:"first_sequence"`
+	} `json:"service"`
 }
 
 func loadWire(t *testing.T) wireSpec {
@@ -178,6 +189,16 @@ func TestWireConstantsMatchSpec(t *testing.T) {
 	assert.Equal(t, chanOpenerToCreator, s.Channel.OpenerToCreator)
 	assert.Equal(t, typeStreamData, s.Conn.TypeData)
 	assert.Equal(t, typeStreamEOF, s.Conn.TypeEOF)
+
+	assert.Equal(t, serviceRegistrySuffix, s.Service.RegistrySuffix)
+	assert.Equal(t, serviceClientPrefix, s.Service.ClientPrefix)
+	assert.Equal(t, serviceClientIDs, s.Service.ClientIDDigits)
+	assert.Equal(t, serviceReservedMin, s.Service.ReservedTypeMin)
+	assert.Equal(t, typeServiceKnock, s.Service.TypeKnock)
+	assert.Equal(t, typeServiceHello, s.Service.TypeHello)
+	assert.Equal(t, typeServiceError, s.Service.TypeError)
+	assert.Equal(t, serviceSeqSize, s.Service.SequenceSize)
+	assert.Equal(t, serviceFirstSeq, s.Service.FirstSequence)
 }
 
 func TestPathsMatchSpec(t *testing.T) {

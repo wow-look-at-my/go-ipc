@@ -48,7 +48,7 @@ func (c *checker) names() {
 		switch {
 		case !messageName.MatchString(m.Name):
 			c.errorf(m.Pos, "message name %q must be UpperCamel", m.Name)
-		case pyNames[m.Name] || strings.HasPrefix(snake, "ipcgen"):
+		case pyNames[m.Name] || goNames[m.Name] || strings.HasPrefix(snake, "ipcgen"):
 			c.errorf(m.Pos, "message name %q is reserved", m.Name)
 		case s.byName[m.Name] != nil:
 			c.errorf(m.Pos, "message %s is already declared at line %d", m.Name, s.byName[m.Name].Pos.Line)

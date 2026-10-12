@@ -58,8 +58,7 @@ struct goipc_queue {
 	/* gone_rx is the inbound queue of a channel, woken when the peer goes. */
 	goipc_queue *gone_rx;
 
-	/* An operation in flight holds a pointer into the mapping, so close
-	 * waits for it rather than unmap under it. */
+	/* An operation in flight holds a pointer into the mapping, so close waits for it rather than unmap under it. */
 	struct goipc_gate gate;
 };
 
@@ -873,8 +872,7 @@ int goipc_queue_close(goipc_queue *q)
 	peer_stop(q);
 	producers_stop(q);
 
-	/* Closing the events releases every parked waiter, which lets the
-	 * in-flight count fall to zero. */
+	/* Closing the events releases every parked waiter, which lets the in-flight count fall to zero. */
 	int rc = goipc_event_close(q->ne);
 	int rc2 = goipc_event_close(q->nf);
 	if (rc == GOIPC_OK)

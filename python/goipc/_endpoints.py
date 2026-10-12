@@ -25,6 +25,17 @@ def runtime_dir() -> str:
 	return lib().goipc_runtime_dir().decode("utf-8")
 
 
+def release() -> None:
+	"""Removes the life socket of this process.
+
+	Call it only just before the process exits, after every endpoint is
+	closed. A peer that already watches this process keeps its connection
+	until the exit. A later check judges this process gone. A process with no
+	life socket has nothing to remove, and a second call does nothing.
+	"""
+	_util.check(lib().goipc_release())
+
+
 class _Handle(_util.Endpoint):
 	"""Owns a C handle: destroy on collection, close that tolerates a repeat."""
 

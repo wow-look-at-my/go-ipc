@@ -13,13 +13,13 @@ PEER_GEN := $(B)/peer
 CXXFLAGS_COMMON := -std=c++20 -Wall -Wextra -Werror -O2 -pthread -Iinclude
 GTEST_CFLAGS := $(shell pkg-config --cflags gtest_main)
 GTEST_LIBS := $(shell pkg-config --libs gtest_main)
-TEST_FLAGS := $(GTEST_CFLAGS) -I$(GEN) -I.. -DGOIPC_SPEC_DIR='"$(SPEC_DIR)"' -DGOIPC_PEER_BIN='"$(abspath $(B)/goipc-peer)"'
+TEST_FLAGS := $(GTEST_CFLAGS) -I$(GEN) -I$(GEN_DIR)/cpp -I.. -DGOIPC_SPEC_DIR='"$(SPEC_DIR)"' -DGOIPC_PEER_BIN='"$(abspath $(B)/goipc-peer)"'
 ASAN_FLAGS := -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
 TSAN_FLAGS := -g -fsanitize=thread
 
 HEADERS := $(wildcard include/goipc/*.hpp)
 TEST_SRCS := $(wildcard tests/*_test.cpp)
-TEST_DEPS := $(HEADERS) tests/helpers.hpp $(GEN)/spec_wire.hpp $(GEN)/spec_vectors.hpp ../c/include/goipc.h
+TEST_DEPS := $(HEADERS) tests/helpers.hpp $(GEN)/spec_wire.hpp $(GEN)/spec_vectors.hpp ../c/include/goipc.h $(GEN_DIR)/cpp/demo.hpp
 # The TSan build covers the threaded tests. TSan does not support fork from a
 # threaded process, so the fork tests stay in the other builds.
 TSAN_SRCS := tests/concurrency_test.cpp

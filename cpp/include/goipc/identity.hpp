@@ -282,4 +282,27 @@ inline watch_state poll_watch(int fd, std::uint64_t id, int &err) noexcept
 
 } // namespace goipc::detail
 
+namespace goipc {
+
+// release removes the life socket of this process. Call it only before the
+// process exits, after every endpoint is closed. A peer that already watches
+// this process keeps its connection until the exit. A later check judges this
+// process gone.
+inline void release()
+{
+	detail::life &l = detail::life_state();
+	std::string path;
+	{
+		std::lock_guard lock(l.mu);
+		// release never makes a procID.
+		if (!l.ready || l.listen_fd < 0)
+			return;
+		path = detail::life_path(l.id);
+	}
+	if (::unlink(path.c_str()) != 0 && errno != ENOENT)
+		detail::throw_errno("goipc: release " + path);
+}
+
+} // namespace goipc
+
 #endif

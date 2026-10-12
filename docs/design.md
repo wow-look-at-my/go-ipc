@@ -44,13 +44,13 @@ Put a pair of such cursors on one line and every producer claim invalidates the 
 | 384 | `headCache`, `recvWaiters`, `sendWaiters` | both sides |
 | 512 | claim slots: `owner`, `at`, `size` | the producer that owns the slot |
 
-A cursor is 64 bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
+A cursor is many bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
 
 `headCache` lets a producer decide it has room without a read of the consumer's line. A producer refreshes it only when the cached value reports the ring full.
 
 ## Record format
 
-A record is a header of 8 bytes and then its payload. The next record starts at the following 8-byte boundary.
+A record is a header of several bytes and then its payload. The next record starts at the following 8-byte boundary.
 
 ```
  0      4        8
@@ -90,7 +90,7 @@ Only the handle `CreateQueue` returns may receive. Any other handle gets `ErrNot
 
 A producer that dies between its claim and its commit leaves a record the reader cannot pass. Each queue claim therefore names its producer.
 
-A process takes a claim slot for each claim it has open, from a pool it keeps. Before the compare-and-swap on `tail`, the producer writes the range it is about to claim into its slot: `at` is the cursor, `size` is the claim. It clears `at` after the commit. The slot's `owner` is the procID of the process.
+A process takes a claim slot for each claim it has open, from a pool it keeps. Before the compare-and-swap on `tail`, the producer writes the range of its claim into its slot. `at` is the cursor, and `size` is the claim. It clears `at` after the commit. The slot's `owner` is the procID of the process.
 
 A reader that stops at a record that is not committed looks for the slots whose range covers its cursor. The true producer is always among them. A live producer's intent stays in place from before its compare-and-swap until after its commit. The reader saw `tail` move, so it also sees that intent.
 
@@ -110,6 +110,8 @@ The first use of the package in a process listens on a Unix socket in the runtim
 Pids, start times and pid namespaces play no part. A container that shares the runtime directory reaches the socket, whatever pid namespace it runs in. The same code runs on Linux, macOS and Windows, and in a `GOOS=cosmo` binary on each of them.
 
 On Unix the socket is bound under a temporary name and renamed into place. A bound socket refuses a dial until it listens, and the sweep removes a socket that refuses, but never one with a temporary name. The sweep removes the life sockets of processes that are gone, along with stale queue names. Windows has no sweep. As a result, a life socket stays in the temporary directory after its process exits.
+
+`Release` removes the socket file of this process, just before it exits. The listener and every accepted connection stay open. A watch that started earlier still ends at the exit. A later check finds no file and judges the process gone, so nothing may send or receive after it. A process that releases leaves no file for the sweep, and on Windows none in the temporary directory.
 
 A host that cannot listen on a Unix socket gives the process a procID without the top bit. Its queues work. No peer judges its liveness, and it judges no peer that lacks the bit either. Its death is not detected.
 
@@ -170,11 +172,11 @@ A waiter reads the FIFO itself, through a handle of its own. It takes that handl
 
 A token is consumed only by a read that returns it. A cancelled wait therefore swallows no wakeup. A signal that arrives before any waiter stays in the pipe until a waiter reads it.
 
-An earlier design put a reader goroutine per event in front of the waiters and handed tokens on over a channel. That code is gone. It cost a pair of goroutine handoffs on every wakeup, measured at about 11 microseconds per round trip on the development machine. It also carried a defect that the current design cannot express. A reader that ran while its own process had no waiter took a wakeup that a waiter in another process needed, and stranded it.
+An earlier design put a reader goroutine per event in front of the waiters and handed tokens on over a channel. That code is gone. It cost a pair of goroutine handoffs on every wakeup, measured at several microseconds per round trip on the development machine. It also carried a defect that the current design cannot express. A reader that ran while its own process had no waiter took a wakeup that a waiter in another process needed, and stranded it.
 
 On Windows an event is a named semaphore. A waiter calls `WaitForMultipleObjects` over that semaphore, a shared close handle, and a cancel handle of its own. This wait does occupy a thread for its duration, which the Unix poller avoids. The Go runtime hands the processor to another thread meanwhile, so other goroutines keep running.
 
-A cosmo binary on a Windows host has no FIFOs, because `mkfifo` fails there. Its events use a Unix socket instead (`event_sock.go`). The creator listens on the socket and keeps the token count. A waiter connects and sends a wait request. The creator answers with a token when one is free. A signal connects and adds tokens. A cancelled waiter sends a cancel. The creator answers it only while the waiter is still queued, so no token is lost. The socket name is a hash of the event path, because a socket path must fit in `sun_path`.
+A cosmo binary on a Windows host has no FIFOs, because `mkfifo` fails there. Its events use a Unix socket instead (`event_sock.go`). The creator listens on the socket and keeps the token count. Each handle, the creator's own included, connects once at open and keeps that connection, so an unlinked event still takes a new waiter. A waiter sends a wait request on it. The creator answers with a token when one is free. The handle gives it to its oldest waiter. A signal adds tokens on the same connection. A cancelled waiter sends a cancel, which drops one queued request of the connection. When none is queued, its token is already on the way, and the handle sends that token back. So no token is stranded in a process with no waiter, which was the defect of the old FIFO reader goroutine. The socket name is a hash of the event path, because a socket path must fit in `sun_path`.
 
 When the creator exits or closes, every waiter connection breaks. The wait then reports `ErrPeerGone`, because nobody can signal the event after that. A signal to a dead creator is dropped, the same as a write to a FIFO that nobody reads. An open checks the path with `Lstat`. A dial cannot tell a dead creator from a missing path, because Windows refuses both. `Lstat` fails with `ENOENT` only when the path is gone.
 
@@ -190,7 +192,7 @@ A claim is the exception that the API cannot police. It points into the mapping.
 
 A producer that dies holding a claim is covered in "Claim slots and dead producers". A reader or a channel peer that dies is covered in "Peers".
 
-A corrupt length makes `Read` return `ErrCorrupt` rather than a slice out of bounds. A length is corrupt when it runs past the committed cursor, runs past the end of the data region, or is too small to hold a header.
+A corrupt length makes `Read` return `ErrCorrupt` rather than a slice out of bounds. A length is corrupt when it runs past the committed cursor or past the end of the data region. A length too small to hold a header is corrupt too.
 
 A plain queue has no peer. Its receiver waits for new senders for as long as it runs. A context is the way to bound that wait.
 

@@ -40,6 +40,8 @@ enum class errc : int {
 	not_consumer = -20,
 	// Live claims hold every claim slot of the ring.
 	too_many_claims = -21,
+	// A service handler returned an error. The error's what() carries its message.
+	call = -22,
 };
 
 namespace detail {
@@ -72,6 +74,7 @@ public:
 		case errc::in_use: return "name is in use";
 		case errc::not_consumer: return "handle is not the receiving end";
 		case errc::too_many_claims: return "too many claims in progress";
+		case errc::call: return "call failed";
 		}
 		return "unknown goipc error";
 	}

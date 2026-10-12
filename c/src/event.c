@@ -10,8 +10,7 @@
 #include "internal.h"
 
 /* An event is a FIFO opened read-write and non-blocking. Waiters poll it
- * together with a close pipe. Close writes one byte to that pipe and never
- * drains it, so every present and future poller wakes. */
+ * together with a close pipe. */
 struct goipc_event {
 	char *path;
 	int fd;

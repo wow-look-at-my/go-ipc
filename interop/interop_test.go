@@ -29,11 +29,15 @@ const (
 	// recoverCount keeps the claims of the recover cell at the cursors that spec/peer.md lists.
 	recoverCount = 200
 	goneCount    = 500
+	serviceCalls = 200
 	readyTimeout = 30 * time.Second
 	cellTimeout  = 120 * time.Second
 )
 
 var allLangs = []string{"go", "c", "cpp", "py"}
+
+// stopModes are the ways spec/peer.md lets a peer stop.
+var stopModes = []string{"close", "exit", "release"}
 
 // peerEnvs names the variable that holds each peer command. Go has none: its
 // peer is this test binary.
@@ -340,7 +344,7 @@ func TestInterop(t *testing.T) {
 	})
 
 	t.Run("receiver-gone", func(t *testing.T) {
-		for _, mode := range []string{"close", "exit"} {
+		for _, mode := range stopModes {
 			for _, rl := range ls {
 				for _, sl := range ls {
 					t.Run(mode+"/"+sl+"->"+rl, func(t *testing.T) {
@@ -363,7 +367,7 @@ func TestInterop(t *testing.T) {
 	})
 
 	t.Run("channel-peer-gone", func(t *testing.T) {
-		for _, mode := range []string{"close", "exit"} {
+		for _, mode := range stopModes {
 			for _, ll := range ls {
 				for _, dl := range ls {
 					t.Run(mode+"/"+dl+"->"+ll, func(t *testing.T) {
@@ -377,6 +381,45 @@ func TestInterop(t *testing.T) {
 						requireNoLeftovers(t, name)
 					})
 				}
+			}
+		}
+	})
+
+	t.Run("service", func(t *testing.T) {
+		for _, sl := range ls {
+			for _, cl := range ls {
+				t.Run(cl+"->"+sl, func(t *testing.T) {
+					t.Parallel()
+					ctx := cellContext(t)
+					name := endpointName(t, "service")
+					serve := startPeer(t, ctx, sl, "service-serve", name, strconv.Itoa(capacity), "2")
+					serve.waitReady(t)
+					closing := startPeer(t, ctx, cl, "service-call", name, strconv.Itoa(serviceCalls), "close")
+					exiting := startPeer(t, ctx, cl, "service-call", name, strconv.Itoa(serviceCalls), "exit")
+					runCell(t, serve, []*proc{closing, exiting}, "ok 2")
+					for _, c := range []*proc{closing, exiting} {
+						require.Equal(t, []string{fmt.Sprintf("ok %d", serviceCalls)}, c.lines, "client stdout\n%s", c.report())
+					}
+					requireNoLeftovers(t, name)
+				})
+			}
+		}
+	})
+
+	// The client starts before the service exists and parks until it does.
+	t.Run("service-early", func(t *testing.T) {
+		for _, sl := range ls {
+			for _, cl := range ls {
+				t.Run(cl+"->"+sl, func(t *testing.T) {
+					t.Parallel()
+					ctx := cellContext(t)
+					name := endpointName(t, "svcearly")
+					call := startPeer(t, ctx, cl, "service-call", name, strconv.Itoa(serviceCalls), "close")
+					serve := startPeer(t, ctx, sl, "service-serve", name, strconv.Itoa(capacity), "1")
+					runCell(t, serve, []*proc{call}, "ok 1")
+					require.Equal(t, []string{fmt.Sprintf("ok %d", serviceCalls)}, call.lines, "client stdout\n%s", call.report())
+					requireNoLeftovers(t, name)
+				})
 			}
 		}
 	})

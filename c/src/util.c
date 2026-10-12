@@ -49,6 +49,7 @@ const char *goipc_strerror(int err)
 	case GOIPC_EINUSE: return "goipc: name is in use";
 	case GOIPC_ENOTCONSUMER: return "goipc: handle is not the receiving end";
 	case GOIPC_ETOOMANYCLAIMS: return "goipc: too many claims in progress";
+	case GOIPC_ECALL: return "goipc: call failed";
 	default: return "goipc: unknown error";
 	}
 }
@@ -134,7 +135,7 @@ void goipc__gate_destroy(struct goipc_gate *g)
 	pthread_mutex_destroy(&g->mu);
 }
 
-/* The increment here and the store in gate_close are both seq_cst, so either
+/* The increment here and the store in gate_close are both seq_cst. Either
  * the close waits for this operation or this operation backs out. */
 bool goipc__gate_enter(struct goipc_gate *g)
 {

@@ -52,6 +52,7 @@ _PROTOTYPES = {
 	"goipc_strerror": (_cp, [_i]),
 	"goipc_last_errno": (_i, []),
 	"goipc_runtime_dir": (_cp, []),
+	"goipc_release": (_i, []),
 	"goipc_ring_size": (_sz, [_sz]),
 	"goipc_ring_init": (_i, [ring_p, _vp, _sz]),
 	"goipc_ring_attach": (_i, [ring_p, _vp, _sz]),

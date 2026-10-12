@@ -27,6 +27,7 @@ EPEERGONE = -18
 EINUSE = -19
 ENOTCONSUMER = -20
 ETOOMANYCLAIMS = -21
+ECALL = -22
 
 
 class IpcError(Exception):
@@ -132,6 +133,12 @@ class TooManyClaims(IpcError):
 	code = ETOOMANYCLAIMS
 
 
+class CallError(IpcError):
+	"""A service handler raised, or returned an error. The message is the handler's."""
+
+	code = ECALL
+
+
 class CallbackError(IpcError):
 	"""A read callback raised. The C reader had already consumed later records.
 
@@ -148,7 +155,7 @@ _BY_CODE: Dict[int, Type[IpcError]] = {
 		Closed, Full, Empty, MessageTooLarge, ReservedType, InvalidName,
 		InvalidCapacity, TooSmall, BadLayout, Corrupt, Unaligned, Timeout,
 		SystemCallError, NoMemory, InvalidArgument, BufferTooSmall, EndOfStream,
-		PeerGone, InUse, NotConsumer, TooManyClaims,
+		PeerGone, InUse, NotConsumer, TooManyClaims, CallError,
 	)
 }
 

@@ -50,4 +50,13 @@
 "inline constexpr std::string_view opener_to_creator_suffix = \(.channel.opener_to_creator_suffix | tojson);",
 "inline constexpr std::uint64_t conn_type_data = \(.conn.type_data);",
 "inline constexpr std::uint64_t conn_type_eof = \(.conn.type_eof);",
+"inline constexpr std::string_view service_registry_suffix = \(.service.registry_suffix | tojson);",
+"inline constexpr std::string_view service_client_prefix = \(.service.client_prefix | tojson);",
+"inline constexpr std::uint64_t service_client_id_hex_digits = \(.service.client_id_hex_digits);",
+"inline constexpr std::uint64_t service_reserved_type_min = \(.service.reserved_type_min);",
+"inline constexpr std::uint64_t service_type_knock = \(.service.type_knock);",
+"inline constexpr std::uint64_t service_type_hello = \(.service.type_hello);",
+"inline constexpr std::uint64_t service_type_error = \(.service.type_error);",
+"inline constexpr std::uint64_t service_sequence_size = \(.service.sequence_size);",
+"inline constexpr std::uint64_t service_first_sequence = \(.service.first_sequence);",
 "}"

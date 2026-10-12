@@ -68,8 +68,7 @@ int goipc_channel_open(const char *name, goipc_channel **out)
 		goto out;
 	}
 	goipc__channel_link(c->tx, c->rx);
-	/* The creator may already be parked. It wakes to find its peer, and to
-	 * start the watch on the peer's process. */
+	/* The creator may already be parked. It wakes to find its peer, and to start the watch on the peer's process. */
 	goipc__queue_wake_receiver(c->tx);
 	*out = c;
 	c = NULL;

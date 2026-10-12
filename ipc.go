@@ -2,9 +2,9 @@
 //
 // [Ring] is a lock-free multi-producer single-consumer buffer of
 // variable-length records inside a byte slice. [Event] is a named cross-process
-// wake primitive whose waiters park on the Go poller, so a blocked wait costs
-// no thread and honors a [context.Context]. [Queue], [Channel] and [Conn]
-// combine both into named endpoints with blocking sends and receives.
+// wake primitive whose waiters park on the Go poller. A blocked wait costs no
+// thread and honors a [context.Context]. [Queue], [Channel] and [Conn] combine
+// both into named endpoints with blocking sends and receives.
 //
 // An endpoint with work to do makes no system call. An endpoint that cannot
 // proceed parks on a kernel wait. Nothing spins. A process that dies holding
@@ -48,12 +48,10 @@ var (
 	// ErrCorrupt reports a record header that cannot be valid.
 	ErrCorrupt = errors.New("ipc: ring contents are corrupt")
 
-	// ErrUnaligned reports a buffer whose earliest byte is not 8-byte
-	// aligned. The ring stores atomics inside the buffer and needs that alignment.
+	// ErrUnaligned reports a buffer whose earliest byte is not 8-byte aligned.
 	ErrUnaligned = errors.New("ipc: buffer is not 8-byte aligned")
 
 	// ErrNotPollable reports an event handle that cannot join the Go poller.
-	// A wait on it would occupy a thread, so the constructor refuses it.
 	ErrNotPollable = errors.New("ipc: event handle does not support polling")
 
 	// ErrPeerGone reports that the process at the other end exited or closed its end.
