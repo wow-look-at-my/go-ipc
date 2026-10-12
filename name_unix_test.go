@@ -34,6 +34,19 @@ func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 	assert.ErrorIs(t, err, fs.ErrNotExist)
 }
 
+func TestUnlinkSegmentAcceptsAnInstanceAnotherProcessRemoved(t *testing.T) {
+	inst := instanceName(uniqueName(t), "0123456789abcdef")
+	created, err := shm.Create(inst, 4096)
+	require.NoError(t, err)
+	defer created.Close()
+	opened, err := shm.Open(inst)
+	require.NoError(t, err)
+	defer opened.Close()
+
+	require.NoError(t, unlinkSegment(created))
+	require.NoError(t, unlinkSegment(opened), "the segment was already gone")
+}
+
 func TestSweepRemovesLifeSocketOfDeadProcess(t *testing.T) {
 	live, liveID, _ := startIdent(t)
 	dead := deadProcID(t)
