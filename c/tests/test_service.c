@@ -426,10 +426,20 @@ static void handle_hold(void *ctx, goipc_session *s, uint32_t type, const uint8_
 	goipc_reply_set(reply, T_PARKED, NULL, 0);
 }
 
+static int64_t process_cpu_ns(void)
+{
+	struct rusage ru;
+	if (getrusage(RUSAGE_SELF, &ru) != 0)
+		return -1;
+	return ((int64_t)ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 1000000000 +
+	       ((int64_t)ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) * 1000;
+}
+
 /* The child parks one client in a call, and another in a connect to a
- * service that never comes, for the whole window. It exits 0 only if both
- * waits timed out. */
-static int run_parked_child(const char *name, const char *absent)
+ * service that never comes, for the whole window. It writes the CPU the
+ * process spent from the start of the window to the end of both waits to
+ * out. It exits 0 only if both waits timed out. */
+static int run_parked_child(const char *name, const char *absent, int out)
 {
 	goipc_service *svc;
 	if (goipc_service_serve(name, 4096, handle_hold, NULL, NULL, &svc) != GOIPC_OK)
@@ -437,6 +447,7 @@ static int run_parked_child(const char *name, const char *absent)
 	goipc_client *c;
 	if (goipc_client_connect(name, 4096, MS(5000), &c) != GOIPC_OK)
 		return 3;
+	int64_t cpu_start = process_cpu_ns();
 	struct waiter w = {absent, MS(PARK_WINDOW_MS), NULL, 99};
 	pthread_t th;
 	if (pthread_create(&th, NULL, connect_in_thread, &w) != 0)
@@ -446,9 +457,12 @@ static int run_parked_child(const char *name, const char *absent)
 	size_t len;
 	int rc = goipc_client_call(c, T_PARK, NULL, 0, MS(PARK_WINDOW_MS), &type, reply, sizeof reply, &len);
 	int status = rc == GOIPC_ETIMEDOUT ? 0 : 5;
+	pthread_join(th, NULL);
+	int64_t cpu = process_cpu_ns() - cpu_start;
+	if (write(out, &cpu, sizeof cpu) != sizeof cpu)
+		status = 7;
 	goipc_client_destroy(c);
 	goipc_service_destroy(svc);
-	pthread_join(th, NULL);
 	if (w.rc != GOIPC_ETIMEDOUT)
 		status = 6;
 	return status;
@@ -459,18 +473,24 @@ TEST(parked_call_consumes_no_cpu, T_FORK)
 	char name[96], absent[96];
 	unique_name(name, sizeof name, "svcpark");
 	unique_name(absent, sizeof absent, "svcabsent");
+	int fds[2];
+	REQUIRE(pipe(fds) == 0);
 	int64_t start = now_ns();
 	pid_t pid = fork();
 	REQUIRE(pid >= 0);
-	if (pid == 0)
-		_exit(run_parked_child(name, absent));
+	if (pid == 0) {
+		close(fds[0]);
+		_exit(run_parked_child(name, absent, fds[1]));
+	}
+	close(fds[1]);
 	int status;
-	struct rusage ru;
-	REQUIRE(wait4(pid, &status, 0, &ru) == pid);
+	REQUIRE(waitpid(pid, &status, 0) == pid);
 	int64_t wall = now_ns() - start;
 	REQUIRE(WIFEXITED(status) && WEXITSTATUS(status) == 0, "child status %d", status);
-	int64_t cpu = ((int64_t)ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 1000000000 +
-		      ((int64_t)ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) * 1000;
+	int64_t cpu;
+	REQUIRE(read(fds[0], &cpu, sizeof cpu) == sizeof cpu);
+	close(fds[0]);
+	REQUIRE(cpu >= 0, "getrusage failed in the child");
 	CHECK(wall >= MS(PARK_WINDOW_MS), "child returned after %lld ms", (long long)(wall / 1000000));
 	CHECK(cpu < MS(PARK_WINDOW_MS) / 10, "a parked call and connect burned %lld ms of CPU in a %d ms window",
 	      (long long)(cpu / 1000000), PARK_WINDOW_MS);
