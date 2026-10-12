@@ -101,25 +101,20 @@ char *goipc__event_path(const char *name);
 
 /* ---- sys.c: the system calls that Linux and macOS spell differently ---- */
 
-/* goipc__random fills buf from the kernel's random source. It returns 0 or an errno. */
+/* goipc__random fills buf from the kernel's random source. */
 int goipc__random(void *buf, size_t len);
-/* goipc__pipe makes a pipe with both ends close-on-exec and non-blocking. It returns 0 or an errno. */
+/* goipc__pipe makes a pipe with both ends close-on-exec and non-blocking. */
 int goipc__pipe(int fd[2]);
-/* goipc__socket makes a close-on-exec AF_UNIX stream socket, non-blocking
- * when asked. It returns the descriptor, or -1 with errno set. */
+/* goipc__socket makes a close-on-exec AF_UNIX stream socket, non-blocking when asked. */
 int goipc__socket(bool nonblock);
-/* goipc__accept accepts a close-on-exec, non-blocking connection. It returns
- * the descriptor, or -1 with errno set. */
+/* goipc__accept accepts a close-on-exec, non-blocking connection. */
 int goipc__accept(int listen_fd);
-/* goipc__dup_cloexec makes to a close-on-exec copy of from, as dup3 does. It is
- * safe in the child of a fork. */
+/* goipc__dup_cloexec makes to a close-on-exec copy of from, as dup3 does. It is safe in the child of a fork. */
 int goipc__dup_cloexec(int from, int to);
-/* goipc__poll is poll with an absolute CLOCK_MONOTONIC deadline, or no
- * deadline when it is NULL. It returns what poll returns. */
+/* goipc__poll is poll with an absolute CLOCK_MONOTONIC deadline, or no deadline when it is NULL. */
 int goipc__poll(struct pollfd *fds, nfds_t nfds, const struct timespec *deadline);
 
-/* goipc__deadline turns a relative timeout into an absolute CLOCK_MONOTONIC
- * time. It returns NULL for a negative timeout, which means no deadline. */
+/* goipc__deadline turns a relative timeout into an absolute CLOCK_MONOTONIC time. */
 const struct timespec *goipc__deadline(int64_t timeout_ns, struct timespec *out);
 /* */
 void goipc__remaining(const struct timespec *deadline, struct timespec *out);

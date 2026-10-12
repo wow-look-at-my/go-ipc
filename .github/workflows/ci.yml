@@ -17,7 +17,7 @@ permissions:
   artifact-metadata: write
 
 jobs:
-  # The root go-toolchain run also covers interop/ and codegen/go. Linux builds and tests the C, C++ and Python implementations and their peers first, macOS the C and Python ones, and Windows runs the interop matrix with the Go peer alone.
+  # The root go-toolchain run also covers interop/ and codegen/go. Linux builds and tests the C, C++ and Python implementations and their peers first, macOS the C. Python ones, and Windows runs the interop matrix with the Go peer alone.
   test:
     strategy:
       matrix:

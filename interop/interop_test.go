@@ -103,7 +103,7 @@ func peerCommand(t *testing.T, lang string) ([]string, []string) {
 var nameCounter atomic.Uint64
 
 // runtimeDir is the directory every peer keeps its files in: /dev/shm on a
-// host that has it, and the temporary directory otherwise, as on macOS.
+// host that has it, and the temporary directory otherwise.
 func runtimeDir() string {
 	if info, err := os.Stat("/dev/shm"); err == nil && info.IsDir() {
 		return "/dev/shm"

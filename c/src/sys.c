@@ -23,10 +23,7 @@ const char *goipc_runtime_dir(void)
 
 #else
 
-/* macOS has no /dev/shm. Its per-user temporary directory is shared by every
- * process of that user, which is the scope a queue needs, and it is where the
- * Go package puts its files on that host. Trailing slashes are dropped so the
- * paths here match the ones Go's filepath.Join produces. */
+/* macOS has no /dev/shm. */
 static pthread_once_t dir_once = PTHREAD_ONCE_INIT;
 static char *dir_value;
 
@@ -44,8 +41,7 @@ static void init_dir(void)
 const char *goipc_runtime_dir(void)
 {
 	pthread_once(&dir_once, init_dir);
-	/* Without memory for the copy, the default stands in: the process is
-	 * about to fail its allocations anyway. */
+	/* Without memory for the copy, the default stands in: the process is about to fail its allocations anyway. */
 	return dir_value != NULL ? dir_value : "/tmp";
 }
 
@@ -77,7 +73,7 @@ int goipc__random(void *buf, size_t len)
 		}
 		have += (size_t)n;
 #else
-		/* getentropy takes at most 256 bytes per call. */
+		/* getentropy takes a bounded number of bytes per call. */
 		size_t chunk = len - have < 256 ? len - have : 256;
 		if (getentropy(p + have, chunk) != 0)
 			return errno;
@@ -90,8 +86,7 @@ int goipc__random(void *buf, size_t len)
 /* ---- descriptors with their flags set at creation ---- */
 
 #ifndef __linux__
-/* set_flags adds close-on-exec and, when asked, non-blocking to fd. It
- * returns 0 or -1 with errno set, and closes fd on failure. */
+/* set_flags adds close-on-exec and, when asked, non-blocking to fd. */
 static int set_flags(int fd, bool nonblock)
 {
 	if (fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 && (!nonblock || fcntl(fd, F_SETFL, O_NONBLOCK) == 0))
@@ -170,8 +165,7 @@ int goipc__poll(struct pollfd *fds, nfds_t nfds, const struct timespec *deadline
 #ifdef __linux__
 	return ppoll(fds, nfds, &left, NULL);
 #else
-	/* poll counts milliseconds. The wait rounds up, so a timeout never
-	 * fires before the deadline. */
+	/* poll counts milliseconds. The wait rounds up, so a timeout never fires before the deadline. */
 	int64_t ms = (int64_t)left.tv_sec * 1000 + (left.tv_nsec + 999999) / 1000000;
 	if (ms > INT_MAX)
 		ms = INT_MAX;
