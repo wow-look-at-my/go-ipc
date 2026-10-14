@@ -1,3 +1,5 @@
+//go:build cosmo || darwin || linux || windows
+
 package filelock
 
 import (
