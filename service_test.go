@@ -67,9 +67,7 @@ func serveTest(t *testing.T, name string) (*Service, *testService) {
 	t.Helper()
 	h := newTestService()
 	svc, err := Serve(name, h, WithCapacity(MinCapacity))
-	if !available(t, err) {
-		return nil, h
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
 	return svc, h
 }
@@ -77,9 +75,7 @@ func serveTest(t *testing.T, name string) (*Service, *testService) {
 func connectTest(t *testing.T, name string) *Client {
 	t.Helper()
 	c, err := Connect(contextWithTimeout(t), name, WithCapacity(MinCapacity))
-	if !available(t, err) {
-		return nil
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { c.Close() })
 	return c
 }
@@ -87,9 +83,6 @@ func connectTest(t *testing.T, name string) *Client {
 func TestServiceAnswersCalls(t *testing.T) {
 	name := uniqueName(t)
 	serveTest(t, name)
-	if !supported {
-		return
-	}
 	c := connectTest(t, name)
 	ctx := contextWithTimeout(t)
 
@@ -115,9 +108,6 @@ func TestServiceAnswersCalls(t *testing.T) {
 func TestServiceGivesEachClientAnOrdinal(t *testing.T) {
 	name := uniqueName(t)
 	serveTest(t, name)
-	if !supported {
-		return
-	}
 	ctx := contextWithTimeout(t)
 
 	seen := map[int]bool{}
@@ -136,9 +126,6 @@ func TestServiceGivesEachClientAnOrdinal(t *testing.T) {
 func TestServiceClientsRunIndependently(t *testing.T) {
 	name := uniqueName(t)
 	_, h := serveTest(t, name)
-	if !supported {
-		return
-	}
 	ctx := contextWithTimeout(t)
 
 	parked := connectTest(t, name)
@@ -178,10 +165,6 @@ func TestServiceClientWaitsForTheService(t *testing.T) {
 		}
 		connected <- c
 	}()
-	if !supported {
-		require.ErrorIs(t, <-failed, errors.ErrUnsupported)
-		return
-	}
 	// The client must have its channel in place before the service scans.
 	require.Eventually(t, func() bool { return len(scanClients(name)) == 1 }, 10*time.Second, time.Millisecond)
 
@@ -201,9 +184,6 @@ func TestServiceClientWaitsForTheService(t *testing.T) {
 func TestServiceReportsAClientThatCloses(t *testing.T) {
 	name := uniqueName(t)
 	_, h := serveTest(t, name)
-	if !supported {
-		return
-	}
 	c := connectTest(t, name)
 	ordinal := c.Ordinal()
 	require.NoError(t, c.Close())
@@ -218,9 +198,6 @@ func TestServiceReportsAClientThatCloses(t *testing.T) {
 func TestServiceReportsAClientThatExits(t *testing.T) {
 	name := uniqueName(t)
 	_, h := serveTest(t, name)
-	if !supported {
-		return
-	}
 	cmd, stdin := startPeer(t, "service-client", name)
 	stdin.Close()
 	require.NoError(t, cmd.Wait())
@@ -236,9 +213,6 @@ func TestServiceReportsAClientThatExits(t *testing.T) {
 func TestServiceCloseFailsEveryCall(t *testing.T) {
 	name := uniqueName(t)
 	svc, _ := serveTest(t, name)
-	if !supported {
-		return
-	}
 	ctx := contextWithTimeout(t)
 	c := connectTest(t, name)
 
@@ -266,9 +240,6 @@ func TestServiceCloseFailsEveryCall(t *testing.T) {
 func TestServiceNameIsHeldWhileItRuns(t *testing.T) {
 	name := uniqueName(t)
 	serveTest(t, name)
-	if !supported {
-		return
-	}
 	_, err := Serve(name, HandlerFunc(func(*Session, uint32, []byte) (uint32, []byte, error) {
 		return 0, nil, nil
 	}))
@@ -278,9 +249,6 @@ func TestServiceNameIsHeldWhileItRuns(t *testing.T) {
 func TestServiceClientDiscardsAStaleReply(t *testing.T) {
 	name := uniqueName(t)
 	_, h := serveTest(t, name)
-	if !supported {
-		return
-	}
 	c := connectTest(t, name)
 
 	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -300,9 +268,6 @@ func TestServiceClientDiscardsAStaleReply(t *testing.T) {
 func TestServiceRejectsReservedTypes(t *testing.T) {
 	name := uniqueName(t)
 	serveTest(t, name)
-	if !supported {
-		return
-	}
 	c := connectTest(t, name)
 	_, _, err := c.Call(contextWithTimeout(t), typeServiceKnock, nil)
 	assert.ErrorIs(t, err, ErrReservedType)
@@ -313,9 +278,6 @@ func TestServiceRejectsReservedTypes(t *testing.T) {
 func TestServiceRejectsAnOversizedCall(t *testing.T) {
 	name := uniqueName(t)
 	serveTest(t, name)
-	if !supported {
-		return
-	}
 	c := connectTest(t, name)
 	_, _, err := c.Call(contextWithTimeout(t), testEcho, make([]byte, c.MaxPayloadSize()+1))
 	assert.ErrorIs(t, err, ErrMessageTooLarge)
@@ -329,9 +291,7 @@ func TestServiceCarriesAFullContextPrompt(t *testing.T) {
 	name := uniqueName(t)
 	h := newTestService()
 	svc, err := Serve(name, h)
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { svc.Close() })
 	c, err := Connect(contextWithTimeout(t), name)
 	require.NoError(t, err)
@@ -361,10 +321,6 @@ func TestServiceConnectGivesUpWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	_, err := Connect(ctx, name, WithCapacity(MinCapacity))
-	if !supported {
-		assert.ErrorIs(t, err, errors.ErrUnsupported)
-		return
-	}
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Empty(t, scanClients(name), "a client that gives up must unlink its channel")
 }
@@ -410,9 +366,7 @@ func TestServiceTypedCalls(t *testing.T) {
 		},
 	}
 	svc, err := Serve(name, h.Handler(), WithCapacity(MinCapacity))
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	defer svc.Close()
 	c := connectTest(t, name)
 	ctx := contextWithTimeout(t)

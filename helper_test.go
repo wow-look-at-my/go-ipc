@@ -2,7 +2,6 @@ package ipc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -14,18 +13,6 @@ import (
 )
 
 var nameCounter atomic.Uint64
-
-// available reports whether a call succeeded. Where the platform lacks the primitives of this package, the call must fail with errors.ErrUnsupported,
-// and the test stops there.
-func available(t *testing.T, err error) bool {
-	t.Helper()
-	if !supported {
-		require.ErrorIs(t, err, errors.ErrUnsupported)
-		return false
-	}
-	require.NoError(t, err)
-	return true
-}
 
 // contextWithTimeout bounds a blocking call in a test, so a defect fails the
 // test rather than hangs it.

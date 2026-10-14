@@ -74,9 +74,6 @@ func TestLockFileCancelReturnsAtOnce(t *testing.T) {
 func TestLockFileHolderDeathReleases(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.lock")
 	child, _ := startPeer(t, "lock-file", path)
-	if !supported {
-		return
-	}
 
 	_, err := lockWithin(path, 200*time.Millisecond)
 	require.ErrorIs(t, err, context.DeadlineExceeded, "the child holds the lock")
