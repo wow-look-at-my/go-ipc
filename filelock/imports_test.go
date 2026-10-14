@@ -15,6 +15,7 @@ func TestImportsNoNet(t *testing.T) {
 		"github.com/wow-look-at-my/go-containers/set",
 		"errors",
 		"os",
+		"sync",
 		"golang.org/x/sys/unix",
 		"syscall",
 		"unsafe",
