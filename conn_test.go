@@ -14,13 +14,16 @@ import (
 
 // newTestConnPair returns both ends of a connection and removes the name
 // afterwards. Both live in this process, which the stream layer allows: the
-// queues underneath carry the direction.
+// queues underneath carry the direction. Where the platform is not supported,
+// it answers nil ends.
 func newTestConnPair(t *testing.T, opts ...Option) (*Conn, *Conn) {
 	t.Helper()
 	name := uniqueName(t)
 
 	server, err := Listen(name, opts...)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return nil, nil
+	}
 	t.Cleanup(func() {
 		server.Close()
 		server.Unlink()
@@ -35,6 +38,9 @@ func newTestConnPair(t *testing.T, opts ...Option) (*Conn, *Conn) {
 
 func TestConnRoundTrip(t *testing.T) {
 	server, client := newTestConnPair(t)
+	if !supported {
+		return
+	}
 
 	require.NoError(t, client.SetDeadline(time.Now().Add(10*time.Second)))
 	require.NoError(t, server.SetDeadline(time.Now().Add(10*time.Second)))
@@ -52,6 +58,9 @@ func TestConnRoundTrip(t *testing.T) {
 // bytes so the write splits and the read reassembles.
 func TestConnSplitsAcrossMessages(t *testing.T) {
 	server, client := newTestConnPair(t, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	require.NoError(t, client.SetDeadline(time.Now().Add(30*time.Second)))
 	require.NoError(t, server.SetDeadline(time.Now().Add(30*time.Second)))
 
@@ -77,6 +86,9 @@ func TestConnSplitsAcrossMessages(t *testing.T) {
 // deliver reports the error net.Conn callers check for.
 func TestConnReadDeadline(t *testing.T) {
 	server, _ := newTestConnPair(t)
+	if !supported {
+		return
+	}
 
 	require.NoError(t, server.SetReadDeadline(time.Now().Add(20*time.Millisecond)))
 
@@ -88,6 +100,9 @@ func TestConnReadDeadline(t *testing.T) {
 // lets the deadline end it.
 func TestConnWriteDeadline(t *testing.T) {
 	_, client := newTestConnPair(t, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 
 	// Nobody reads the other end, so the channel stays full a single time filled.
 	require.NoError(t, client.SetWriteDeadline(time.Now().Add(20*time.Millisecond)))
@@ -104,6 +119,9 @@ func TestConnWriteDeadline(t *testing.T) {
 // net.Conn caller expects, rather than the package's own ErrClosed.
 func TestConnCloseReportsNetErrClosed(t *testing.T) {
 	server, _ := newTestConnPair(t)
+	if !supported {
+		return
+	}
 	require.NoError(t, server.Close())
 
 	_, err := server.Read(make([]byte, 8))
@@ -117,6 +135,9 @@ func TestConnCloseReportsNetErrClosed(t *testing.T) {
 // parked, rather than leaving the goroutine there.
 func TestConnCloseReleasesBlockedRead(t *testing.T) {
 	server, _ := newTestConnPair(t)
+	if !supported {
+		return
+	}
 
 	started := make(chan struct{})
 	result := make(chan error, 1)
@@ -139,6 +160,9 @@ func TestConnCloseReleasesBlockedRead(t *testing.T) {
 
 func TestConnPeerCloseIsEOF(t *testing.T) {
 	server, client := newTestConnPair(t)
+	if !supported {
+		return
+	}
 
 	require.NoError(t, client.Close())
 	require.NoError(t, server.SetReadDeadline(time.Now().Add(10*time.Second)))
@@ -149,6 +173,9 @@ func TestConnPeerCloseIsEOF(t *testing.T) {
 
 func TestConnCloseWriteHalfCloses(t *testing.T) {
 	server, client := newTestConnPair(t)
+	if !supported {
+		return
+	}
 	require.NoError(t, client.SetDeadline(time.Now().Add(10*time.Second)))
 	require.NoError(t, server.SetDeadline(time.Now().Add(10*time.Second)))
 
@@ -179,6 +206,9 @@ func TestConnCloseWriteHalfCloses(t *testing.T) {
 
 func TestConnCloseWriteWaitsForRoom(t *testing.T) {
 	server, client := newTestConnPair(t, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	filler := make([]byte, 512)
 	err := client.Channel().TrySend(filler)
 	for err == nil {
@@ -205,6 +235,9 @@ func TestConnCloseWriteWaitsForRoom(t *testing.T) {
 
 func TestConnAddr(t *testing.T) {
 	server, _ := newTestConnPair(t)
+	if !supported {
+		return
+	}
 	assert.Equal(t, "ipc", server.LocalAddr().Network())
 	assert.Equal(t, server.LocalAddr().String(), server.RemoteAddr().String())
 	assert.NotEmpty(t, server.LocalAddr().String())
@@ -221,7 +254,9 @@ func TestNewConnAdoptsChannel(t *testing.T) {
 	name := uniqueName(t)
 
 	serverCh, err := CreateChannel(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		serverCh.Close()
 		serverCh.Unlink()
@@ -248,6 +283,9 @@ func TestNewConnAdoptsChannel(t *testing.T) {
 // connection usable, the way a net.Conn does.
 func TestConnDeadlineIsNotFatal(t *testing.T) {
 	server, client := newTestConnPair(t)
+	if !supported {
+		return
+	}
 
 	require.NoError(t, server.SetReadDeadline(time.Now().Add(20*time.Millisecond)))
 	_, err := server.Read(make([]byte, 8))

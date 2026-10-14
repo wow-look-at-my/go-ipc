@@ -12,13 +12,16 @@ import (
 )
 
 // newTestQueuePair creates a queue and opens another handle on it, the way
-// processes would, and removes the name afterwards.
+// processes would, and removes the name afterwards. Where the platform is not
+// supported, it answers nil handles.
 func newTestQueuePair(t *testing.T, opts ...Option) (*Queue, *Queue) {
 	t.Helper()
 	name := uniqueName(t)
 
 	creator, err := CreateQueue(name, opts...)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return nil, nil
+	}
 	t.Cleanup(func() {
 		creator.Close()
 		creator.Unlink()
@@ -33,6 +36,9 @@ func newTestQueuePair(t *testing.T, opts ...Option) (*Queue, *Queue) {
 
 func TestQueueSendRecvAcrossHandles(t *testing.T) {
 	recv, send := newTestQueuePair(t)
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -47,6 +53,9 @@ func TestQueueSendRecvAcrossHandles(t *testing.T) {
 
 func TestQueueOpenReportsCreatorCapacity(t *testing.T) {
 	recv, send := newTestQueuePair(t, WithCapacity(1<<16))
+	if !supported {
+		return
+	}
 	assert.Equal(t, 1<<16, recv.Capacity())
 	assert.Equal(t, 1<<16, send.Capacity())
 	assert.Equal(t, 1<<15-RecordHeaderSize, send.MaxMessageSize())
@@ -72,6 +81,9 @@ func TestOpenQueueRejectsMissingName(t *testing.T) {
 
 func TestQueueTrySendReportsFull(t *testing.T) {
 	recv, send := newTestQueuePair(t, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 
 	payload := make([]byte, 504)
 	var err error
@@ -87,6 +99,9 @@ func TestQueueTrySendReportsFull(t *testing.T) {
 
 func TestQueueTryRecvReportsEmpty(t *testing.T) {
 	recv, _ := newTestQueuePair(t)
+	if !supported {
+		return
+	}
 	_, _, err := recv.TryRecv(nil)
 	assert.ErrorIs(t, err, ErrEmpty)
 }
@@ -95,6 +110,9 @@ func TestQueueTryRecvReportsEmpty(t *testing.T) {
 // sender fills the queue, parks, and is released by the receiver.
 func TestQueueSendBlocksUntilReceiverDrains(t *testing.T) {
 	recv, send := newTestQueuePair(t, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -124,6 +142,9 @@ func TestQueueSendBlocksUntilReceiverDrains(t *testing.T) {
 
 func TestQueueRecvHonorsContext(t *testing.T) {
 	recv, _ := newTestQueuePair(t)
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -134,6 +155,9 @@ func TestQueueRecvHonorsContext(t *testing.T) {
 
 func TestQueueSendHonorsContext(t *testing.T) {
 	_, send := newTestQueuePair(t, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 
 	payload := make([]byte, 504)
 	for send.TrySend(payload) == nil {
@@ -146,6 +170,9 @@ func TestQueueSendHonorsContext(t *testing.T) {
 
 func TestQueueClaimCommit(t *testing.T) {
 	recv, send := newTestQueuePair(t)
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -165,6 +192,9 @@ func TestQueueClaimCommit(t *testing.T) {
 // receiver must skip it rather than deliver it, and the space must come back.
 func TestQueueAbortReclaimsSpace(t *testing.T) {
 	recv, send := newTestQueuePair(t)
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -193,6 +223,9 @@ func TestQueueAbortReclaimsSpace(t *testing.T) {
 // below waits for a wakeup nobody sends.
 func TestQueueAbortReleasesParkedSender(t *testing.T) {
 	recv, send := newTestQueuePair(t, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -227,6 +260,9 @@ func TestQueueAbortReleasesParkedSender(t *testing.T) {
 
 func TestQueueReadBatchDrainsBurst(t *testing.T) {
 	recv, send := newTestQueuePair(t)
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -245,6 +281,9 @@ func TestQueueReadBatchDrainsBurst(t *testing.T) {
 // TestQueueManySendersOneReceiver is the shape the queue is named for.
 func TestQueueManySendersOneReceiver(t *testing.T) {
 	recv, send := newTestQueuePair(t, WithCapacity(1<<16))
+	if !supported {
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -293,7 +332,9 @@ func TestQueueManySendersOneReceiver(t *testing.T) {
 
 func TestQueueClosedRejectsUse(t *testing.T) {
 	q, err := CreateQueue(uniqueName(t))
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer q.Unlink()
 
 	require.NoError(t, q.Close())

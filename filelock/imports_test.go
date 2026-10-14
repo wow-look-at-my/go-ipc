@@ -23,7 +23,7 @@ func TestImportsNoNet(t *testing.T) {
 		"go/build",
 		"testing")
 
-	for _, goos := range []string{"linux", "darwin", "windows", "freebsd"} {
+	for _, goos := range []string{"linux", "darwin", "windows", "freebsd", "js", "wasip1"} {
 		ctx := build.Default
 		ctx.GOOS = goos
 		pkg, err := ctx.ImportDir(".", 0)

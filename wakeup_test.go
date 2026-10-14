@@ -18,7 +18,9 @@ func TestEventDoesNotStealForeignWakeups(t *testing.T) {
 	name := uniqueName(t)
 
 	thief, err := CreateEvent(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		thief.Close()
 		thief.Unlink()
@@ -64,7 +66,9 @@ func TestQueueWakesSenderInAnotherProcess(t *testing.T) {
 
 	name := uniqueName(t)
 	q, err := CreateQueue(name, WithCapacity(MinCapacity))
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		q.Close()
 		q.Unlink()

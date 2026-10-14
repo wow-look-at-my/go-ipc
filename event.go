@@ -5,6 +5,9 @@ import (
 	"sync"
 )
 
+// pipeBuf is the largest write a pipe guarantees to deliver atomically.
+const pipeBuf = 4096
+
 // An Event is a named wake channel between processes.
 type Event struct {
 	impl      *eventImpl

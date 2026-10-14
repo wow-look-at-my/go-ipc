@@ -14,6 +14,9 @@ import (
 // nameOutlivesHolder is false: delete-on-close removes the name with its holder.
 const nameOutlivesHolder = false
 
+// supported reports whether this platform has the primitives of this package.
+const supported = true
+
 func namePath(name string) string {
 	return filepath.Join(os.TempDir(), "go-ipc-"+name+".name")
 }

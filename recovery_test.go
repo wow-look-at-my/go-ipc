@@ -20,11 +20,14 @@ func testContext(t *testing.T) context.Context {
 	return ctx
 }
 
-// newReceiver creates a queue this test owns and removes it afterwards.
+// newReceiver creates a queue this test owns and removes it afterwards. Where
+// the platform is not supported, it answers nil.
 func newReceiver(t *testing.T, name string, opts ...Option) *Queue {
 	t.Helper()
 	q, err := CreateQueue(name, opts...)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return nil
+	}
 	t.Cleanup(func() {
 		q.Close()
 		q.Unlink()
@@ -53,6 +56,9 @@ func strandClaim(t *testing.T, q *Queue, owner procID, slot int, size uint64, he
 func TestReceiverSkipsClaimOfDeadProducer(t *testing.T) {
 	name := uniqueName(t)
 	q := newReceiver(t, name, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 
 	child := startChild(t, "abandon", name, 0)
 	require.NoError(t, child.Wait())
@@ -68,6 +74,9 @@ func TestReceiverSkipsClaimOfDeadProducer(t *testing.T) {
 func TestReceiverWakesWhenProducerDiesHoldingClaim(t *testing.T) {
 	name := uniqueName(t)
 	q := newReceiver(t, name, WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 
 	holder, _ := startPeer(t, "hold", name)
 	require.NoError(t, q.TrySend([]byte("after")))
@@ -94,6 +103,9 @@ func TestReceiverWakesWhenProducerDiesHoldingClaim(t *testing.T) {
 
 func TestReceiverReclaimsBareClaimOfDeadProducer(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	strandClaim(t, q, deadProcID(t), 7, 16, false)
 	require.NoError(t, q.TrySend([]byte("after")))
 
@@ -104,6 +116,9 @@ func TestReceiverReclaimsBareClaimOfDeadProducer(t *testing.T) {
 
 func TestReceiverReclaimsDeadClaimAcrossWrap(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	ctx := testContext(t)
 
 	for _, size := range []int{2040, 2024} {
@@ -124,6 +139,9 @@ func TestReceiverReclaimsDeadClaimAcrossWrap(t *testing.T) {
 
 func TestReceiverReclaimsWrittenClaimOfDeadProducer(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	strandClaim(t, q, deadProcID(t), 3, 24, true)
 	require.NoError(t, q.TrySend([]byte("after")))
 
@@ -135,6 +153,9 @@ func TestReceiverReclaimsWrittenClaimOfDeadProducer(t *testing.T) {
 
 func TestDeadProducersThatDisagreeAreCorrupt(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	dead := deadProcID(t)
 	strandClaim(t, q, dead, 1, 16, false)
 	// A second dead producer claims to own a longer range at the same spot.
@@ -148,6 +169,9 @@ func TestDeadProducersThatDisagreeAreCorrupt(t *testing.T) {
 
 func TestSlotsOfDeadProducersAreReused(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	dead := deadProcID(t)
 	for idx := range q.ring.hdr.slots {
 		q.ring.hdr.slots[idx].owner.Store(uint64(dead))
@@ -162,6 +186,9 @@ func TestSlotsOfDeadProducersAreReused(t *testing.T) {
 // slots are never judged.
 func TestUnwatchableIsNeverJudged(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(MinCapacity))
+	if !supported {
+		return
+	}
 	dead := deadProcID(t) &^ watchable
 	strandClaim(t, q, dead, 1, 16, false)
 	for idx := 2; idx < ClaimSlots; idx++ {
@@ -184,6 +211,9 @@ func TestUnwatchableIsNeverJudged(t *testing.T) {
 func TestUnwatchableReceiverIsNotWatched(t *testing.T) {
 	name := uniqueName(t)
 	q := newReceiver(t, name)
+	if !supported {
+		return
+	}
 	sender, err := OpenQueue(name)
 	require.NoError(t, err)
 	defer sender.Close()
@@ -197,6 +227,9 @@ func TestUnwatchableReceiverIsNotWatched(t *testing.T) {
 
 func TestClaimSlotsRunOut(t *testing.T) {
 	q := newReceiver(t, uniqueName(t), WithCapacity(1<<16))
+	if !supported {
+		return
+	}
 	ctx := testContext(t)
 
 	claims := make([]Claim, 0, ClaimSlots)
@@ -222,6 +255,9 @@ func TestSendReportsDeadReceiver(t *testing.T) { sendReportsDeadReceiver(t) }
 func sendReportsDeadReceiver(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)
+	if !supported {
+		return
+	}
 
 	q, err := OpenQueue(name)
 	require.NoError(t, err)
@@ -249,7 +285,9 @@ func sendReportsDeadReceiver(t *testing.T) {
 func TestSendReportsClosedReceiver(t *testing.T) {
 	name := uniqueName(t)
 	q, err := CreateQueue(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer q.Unlink()
 	sender, err := OpenQueue(name)
 	require.NoError(t, err)
@@ -265,7 +303,9 @@ func TestSendReportsClosedReceiver(t *testing.T) {
 func TestSendReportsUnlinkedReceiver(t *testing.T) {
 	name := uniqueName(t)
 	q, err := CreateQueue(name, WithCapacity(4096))
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer q.Close()
 	sender, err := OpenQueue(name)
 	require.NoError(t, err)
@@ -283,7 +323,9 @@ func TestSendReportsUnlinkedReceiver(t *testing.T) {
 func TestCreateQueueRejectsLiveHolder(t *testing.T) {
 	name := uniqueName(t)
 	q, err := CreateQueue(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 
 	_, err = CreateQueue(name)
 	require.ErrorIs(t, err, ErrInUse)
@@ -298,6 +340,9 @@ func TestCreateQueueRejectsLiveHolder(t *testing.T) {
 func TestCreateQueueReplacesInstanceOfDeadCreator(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)
+	if !supported {
+		return
+	}
 	old, err := readName(name)
 	require.NoError(t, err)
 
@@ -317,6 +362,9 @@ func TestCreateQueueReplacesInstanceOfDeadCreator(t *testing.T) {
 func TestOpenQueueHandleCannotReceive(t *testing.T) {
 	name := uniqueName(t)
 	newReceiver(t, name)
+	if !supported {
+		return
+	}
 	sender, err := OpenQueue(name)
 	require.NoError(t, err)
 	defer sender.Close()
@@ -332,6 +380,9 @@ func TestOpenQueueHandleCannotReceive(t *testing.T) {
 func TestConcurrentReceiversShareTheQueue(t *testing.T) {
 	const count = 2000
 	q := newReceiver(t, uniqueName(t), WithCapacity(1<<16))
+	if !supported {
+		return
+	}
 	ctx := testContext(t)
 
 	var (
@@ -373,7 +424,9 @@ func TestConcurrentReceiversShareTheQueue(t *testing.T) {
 func TestChannelRecvReportsPeerClose(t *testing.T) {
 	name := uniqueName(t)
 	server, err := CreateChannel(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		server.Close()
 		server.Unlink()
@@ -396,7 +449,9 @@ func TestChannelRecvReportsPeerClose(t *testing.T) {
 func TestChannelRecvWakesOnPeerClose(t *testing.T) {
 	name := uniqueName(t)
 	server, err := CreateChannel(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		server.Close()
 		server.Unlink()
@@ -418,7 +473,9 @@ func TestChannelRecvWakesOnPeerClose(t *testing.T) {
 func TestChannelRecvReportsPeerExit(t *testing.T) {
 	name := uniqueName(t)
 	server, err := CreateChannel(name, WithCapacity(MinCapacity))
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		server.Close()
 		server.Unlink()
@@ -444,7 +501,9 @@ func TestChannelRecvReportsPeerExit(t *testing.T) {
 func TestChannelPeerExitWithoutClose(t *testing.T) {
 	name := uniqueName(t)
 	server, err := CreateChannel(name, WithCapacity(MinCapacity))
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		server.Close()
 		server.Unlink()
@@ -465,7 +524,9 @@ func TestChannelPeerExitWithoutClose(t *testing.T) {
 func TestOpenChannelRejectsSecondPeer(t *testing.T) {
 	name := uniqueName(t)
 	server, err := CreateChannel(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		server.Close()
 		server.Unlink()
@@ -481,7 +542,9 @@ func TestOpenChannelRejectsSecondPeer(t *testing.T) {
 func TestConnDeadlineReachesBlockedRead(t *testing.T) {
 	name := uniqueName(t)
 	server, err := Listen(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		server.Close()
 		server.Unlink()
@@ -514,7 +577,9 @@ func TestConnDeadlineReachesBlockedRead(t *testing.T) {
 func TestConnDeadlineExtendedWhileBlocked(t *testing.T) {
 	name := uniqueName(t)
 	server, err := Listen(name)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer func() {
 		server.Close()
 		server.Unlink()
@@ -536,6 +601,9 @@ func TestConnDeadlineExtendedWhileBlocked(t *testing.T) {
 
 func TestOnExitReportsChildExit(t *testing.T) {
 	_, id, stdin := startIdent(t)
+	if !supported {
+		return
+	}
 
 	exited := make(chan error, 1)
 	cancel, err := onExit(id, func(err error) { exited <- err })
@@ -552,7 +620,9 @@ func TestOnExitReportsChildExit(t *testing.T) {
 func TestDeadOnceWatchSawExit(t *testing.T) {
 	id := randomID()
 	ln, err := listenLife(id)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer ln.Close()
 	go func() {
 		for {
@@ -576,6 +646,9 @@ func TestDeadOnceWatchSawExit(t *testing.T) {
 
 func TestOnExitCancelStopsTheCall(t *testing.T) {
 	cmd, id, _ := startIdent(t)
+	if !supported {
+		return
+	}
 
 	cancel, err := onExit(id, func(error) { t.Error("cancelled watch fired") })
 	require.NoError(t, err)
@@ -590,7 +663,10 @@ func TestOnExitCancelStopsTheCall(t *testing.T) {
 }
 
 func TestSelfIsAlive(t *testing.T) {
-	require.NoError(t, selfErr())
+	if !available(t, selfErr()) {
+		assert.False(t, selfID().watchable(), "a process with no life socket cannot be watched")
+		return
+	}
 	id := selfID()
 	assert.True(t, id.watchable())
 	assert.NotEqual(t, pendingProc, id&^watchable)

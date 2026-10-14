@@ -13,7 +13,9 @@ import (
 func TestUnlinkOpenedToleratesTheOtherEnd(t *testing.T) {
 	name := uniqueName(t)
 	first, err := shm.Create(name, 4096)
-	require.NoError(t, err)
+	if !available(t, err) {
+		return
+	}
 	defer first.Close()
 	second, err := shm.Open(name)
 	require.NoError(t, err)

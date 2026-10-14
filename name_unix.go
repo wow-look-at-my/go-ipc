@@ -24,6 +24,9 @@ const (
 // nameOutlivesHolder is true: the name stays until a sweep or a new creator replaces it.
 const nameOutlivesHolder = true
 
+// supported reports whether this platform has the primitives of this package.
+const supported = true
+
 func namePath(name string) string {
 	return filepath.Join(runtimeDir(), namePrefix+name+nameSuffix)
 }
