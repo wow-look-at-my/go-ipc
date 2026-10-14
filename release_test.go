@@ -53,9 +53,7 @@ func TestReleaseRemovesLifeSocket(t *testing.T) {
 	cmd.Env = append(os.Environ(), childRoleEnv+"=release")
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())

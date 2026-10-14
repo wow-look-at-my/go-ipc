@@ -208,17 +208,14 @@ func readyThenWait() error {
 }
 
 // startPeer starts a child in the given role and waits for it to report
-// ready. Closing the returned pipe lets the child go on. Where the platform
-// is not supported, it answers nil.
+// ready. Closing the returned pipe lets the child go on.
 func startPeer(t *testing.T, role, name string) (*exec.Cmd, io.WriteCloser) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), childRoleEnv+"="+role, childNameEnv+"="+name)
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
-	if !available(t, err) {
-		return nil, nil
-	}
+	require.NoError(t, err)
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
@@ -240,17 +237,14 @@ func kill(t *testing.T, cmd *exec.Cmd) {
 }
 
 // startIdent starts a child that reports its procID and then waits. Closing
-// the returned pipe lets it exit. Where the platform is not supported, it
-// answers nil.
+// the returned pipe lets it exit.
 func startIdent(t *testing.T) (*exec.Cmd, procID, io.WriteCloser) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), childRoleEnv+"=ident")
 	cmd.Stderr = os.Stderr
 	stdin, err := cmd.StdinPipe()
-	if !available(t, err) {
-		return nil, noProc, nil
-	}
+	require.NoError(t, err)
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
@@ -309,9 +303,7 @@ func TestCrossProcessQueue(t *testing.T) {
 
 	name := uniqueName(t)
 	q, err := CreateQueue(name, WithCapacity(1<<16))
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	defer func() {
 		q.Close()
 		q.Unlink()
@@ -339,9 +331,7 @@ func TestCrossProcessQueue(t *testing.T) {
 func TestCrossProcessConnRoundTrip(t *testing.T) {
 	name := uniqueName(t)
 	conn, err := Listen(name, WithCapacity(1<<16))
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	defer func() {
 		conn.Close()
 		conn.Unlink()
@@ -373,9 +363,7 @@ func TestCrossProcessConnRoundTrip(t *testing.T) {
 func TestCrossProcessConnEOF(t *testing.T) {
 	name := uniqueName(t)
 	conn, err := Listen(name, WithCapacity(MinCapacity))
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	defer func() {
 		conn.Close()
 		conn.Unlink()

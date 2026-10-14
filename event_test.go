@@ -10,13 +10,11 @@ import (
 )
 
 // newTestEvent creates an event whose name is unique to the running test and
-// removes it afterwards. Where the platform is not supported, it answers nil.
+// removes it afterwards.
 func newTestEvent(t *testing.T) *Event {
 	t.Helper()
 	e, err := CreateEvent(uniqueName(t))
-	if !available(t, err) {
-		return nil
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() {
 		e.Close()
 		e.Unlink()
@@ -26,9 +24,6 @@ func newTestEvent(t *testing.T) *Event {
 
 func TestEventSignalReleasesWaiter(t *testing.T) {
 	e := newTestEvent(t)
-	if !supported {
-		return
-	}
 
 	waiting := make(chan struct{})
 	result := make(chan error, 1)
@@ -46,9 +41,6 @@ func TestEventSignalReleasesWaiter(t *testing.T) {
 // wait protocol safe: a wakeup that arrives early is not discarded.
 func TestEventSignalBeforeWaitIsKept(t *testing.T) {
 	e := newTestEvent(t)
-	if !supported {
-		return
-	}
 
 	require.NoError(t, e.Signal())
 
@@ -59,9 +51,6 @@ func TestEventSignalBeforeWaitIsKept(t *testing.T) {
 
 func TestEventSignalNReleasesEachWaiter(t *testing.T) {
 	e := newTestEvent(t)
-	if !supported {
-		return
-	}
 
 	const waiters = 4
 	result := make(chan error, waiters)
@@ -84,9 +73,6 @@ func TestEventSignalNReleasesEachWaiter(t *testing.T) {
 
 func TestEventWaitHonorsContext(t *testing.T) {
 	e := newTestEvent(t)
-	if !supported {
-		return
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -98,9 +84,6 @@ func TestEventWaitHonorsContext(t *testing.T) {
 
 func TestEventWaitHonorsDeadline(t *testing.T) {
 	e := newTestEvent(t)
-	if !supported {
-		return
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -109,9 +92,7 @@ func TestEventWaitHonorsDeadline(t *testing.T) {
 
 func TestEventCloseReleasesWaiter(t *testing.T) {
 	e, err := CreateEvent(uniqueName(t))
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	defer e.Unlink()
 
 	ready := make(chan struct{})
@@ -128,9 +109,7 @@ func TestEventCloseReleasesWaiter(t *testing.T) {
 
 func TestEventCloseWithoutWaiterIsClean(t *testing.T) {
 	e, err := CreateEvent(uniqueName(t))
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	defer e.Unlink()
 
 	require.NoError(t, e.Close())
@@ -140,9 +119,7 @@ func TestEventCloseWithoutWaiterIsClean(t *testing.T) {
 func TestOpenEventJoinsExistingName(t *testing.T) {
 	name := uniqueName(t)
 	creator, err := CreateEvent(name)
-	if !available(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	defer func() {
 		creator.Close()
 		creator.Unlink()
