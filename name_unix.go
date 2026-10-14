@@ -91,6 +91,9 @@ func (l *nameLock) publish(inc string) error {
 
 func (l *nameLock) release() error { return l.f.Close() }
 
+// unlink has nothing to do. unlinkName removes the name file by its path.
+func (l *nameLock) unlink() error { return nil }
+
 // readName returns the instance a name points at.
 func readName(name string) (string, error) {
 	if _, err := os.Stat(namePath(name)); errors.Is(err, fs.ErrNotExist) {

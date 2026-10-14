@@ -618,5 +618,10 @@ func (q *Queue) Unlink() error {
 	if uerr := unlinkName(q.name, q.inc); err == nil {
 		err = uerr
 	}
+	if q.lock != nil {
+		if uerr := q.lock.unlink(); err == nil {
+			err = uerr
+		}
+	}
 	return err
 }

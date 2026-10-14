@@ -29,6 +29,8 @@ func (*nameLock) publish(string) error { return errors.ErrUnsupported }
 
 func (*nameLock) release() error { return nil }
 
+func (*nameLock) unlink() error { return nil }
+
 func readName(string) (string, error) { return "", errors.ErrUnsupported }
 
 func unlinkName(string, string) error { return errors.ErrUnsupported }
