@@ -24,6 +24,9 @@ const (
 // nameOutlivesHolder is true: the name stays until a sweep or a new creator replaces it.
 const nameOutlivesHolder = true
 
+// nameGone reports whether err, from a stat of a name file, means the name is gone.
+func nameGone(err error) bool { return errors.Is(err, fs.ErrNotExist) }
+
 func namePath(name string) string {
 	return filepath.Join(runtimeDir(), namePrefix+name+nameSuffix)
 }
