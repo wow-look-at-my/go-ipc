@@ -17,9 +17,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// pipeBuf is the largest write a pipe guarantees to deliver atomically.
-const pipeBuf = 4096
-
 var signalTokens = make([]byte, pipeBuf)
 
 // eventImpl backs an Event with a FIFO.

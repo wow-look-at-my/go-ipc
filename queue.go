@@ -1,3 +1,5 @@
+//go:build cosmo || darwin || linux || windows
+
 package ipc
 
 import (
@@ -617,6 +619,11 @@ func (q *Queue) Unlink() error {
 	err := removeInstance(q.name, q.inc)
 	if uerr := unlinkName(q.name, q.inc); err == nil {
 		err = uerr
+	}
+	if q.lock != nil {
+		if uerr := q.lock.unlink(); err == nil {
+			err = uerr
+		}
 	}
 	return err
 }
