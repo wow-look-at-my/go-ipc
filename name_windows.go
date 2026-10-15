@@ -17,7 +17,13 @@ import (
 const nameOutlivesHolder = false
 
 func namePath(name string) string {
-	return filepath.Join(os.TempDir(), "go-ipc-"+name+".name")
+	return filepath.Join(runtimeDir(), "go-ipc-"+name+".name")
+}
+
+// nameGone reports whether err, from a stat of a name file, means the name is
+// gone.
+func nameGone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_DELETE_PENDING)
 }
 
 // A nameLock holds a name. The creator opens the name file with no write
