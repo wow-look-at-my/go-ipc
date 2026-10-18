@@ -167,7 +167,6 @@ func sweepDir(dir string) {
 	}
 }
 
-
 // sweepName removes a name that no live process holds. The cleanup is on
 // behalf of processes that are gone. A failure costs this caller nothing, and
 // the next sweep tries again.
