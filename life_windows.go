@@ -3,16 +3,30 @@ package ipc
 import (
 	"errors"
 	"net"
+	"os"
 
 	"golang.org/x/sys/windows"
 )
 
 func lifeDir() string { return runtimeDir() }
 
-// listenLife binds the socket at its final name. Windows has no sweep, so
-// nothing can remove the socket before it listens.
+// listenLife binds the socket under a temporary name, then renames it into
+// place. A bound socket refuses a dial until it listens, and the sweep
+// removes a socket that refuses. The sweep never touches a temporary name.
 func listenLife(id procID) (net.Listener, error) {
-	return net.Listen("unix", lifePath(id))
+	path := lifePath(id)
+	tmp := path + ".tmp"
+	ln, err := net.Listen("unix", tmp)
+	if err != nil {
+		return nil, err
+	}
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := os.Rename(tmp, path); err != nil {
+		ln.Close()
+		os.Remove(tmp)
+		return nil, err
+	}
+	return ln, nil
 }
 
 func isRefused(err error) bool { return errors.Is(err, windows.WSAECONNREFUSED) }
