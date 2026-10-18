@@ -27,6 +27,7 @@ var events struct {
 }
 
 type eventImpl struct {
+	name    string
 	sem     *semaphore
 	closing chan struct{}
 	closed  atomic.Bool
@@ -42,7 +43,7 @@ func createEventImpl(name string) (*eventImpl, error) {
 	}
 	events.byName[name] = sem
 	events.mu.Unlock()
-	return &eventImpl{sem: sem, closing: make(chan struct{})}, nil
+	return &eventImpl{name: name, sem: sem, closing: make(chan struct{})}, nil
 }
 
 func openEventImpl(name string) (*eventImpl, error) {
@@ -52,7 +53,7 @@ func openEventImpl(name string) (*eventImpl, error) {
 	if sem == nil {
 		return nil, fmt.Errorf("ipc: no event named %q: %w", name, fs.ErrNotExist)
 	}
-	return &eventImpl{sem: sem, closing: make(chan struct{})}, nil
+	return &eventImpl{name: name, sem: sem, closing: make(chan struct{})}, nil
 }
 
 func unlinkEventImpl(name string) error {
@@ -76,10 +77,18 @@ func (e *eventImpl) signal(n int) error {
 	return nil
 }
 
-// wait blocks until it takes a token, ctx ends, or this handle closes.
+// wait blocks until it takes a token, ctx ends, or this handle closes. A wait
+// that starts after an unlink of its name fails, as a FIFO open does on unix:
+// the receiver unlinks on its way out, and nobody signals the event after that.
 func (e *eventImpl) wait(ctx context.Context) error {
 	if e.closed.Load() {
 		return ErrClosed
+	}
+	events.mu.Lock()
+	linked := events.byName[e.name] == e.sem
+	events.mu.Unlock()
+	if !linked {
+		return fmt.Errorf("ipc: event %q: %w", e.name, fs.ErrNotExist)
 	}
 	select {
 	case <-e.sem.tokens:
