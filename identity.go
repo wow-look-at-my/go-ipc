@@ -124,6 +124,19 @@ func isDead(id procID) bool {
 	return lifeGone(err)
 }
 
+// sweepLife removes the life socket of a process that has exited. Nothing
+// listens there, so a dial is refused.
+func sweepLife(path string) {
+	conn, err := net.Dial("unix", path)
+	if err == nil {
+		conn.Close()
+		return
+	}
+	if isRefused(err) {
+		os.Remove(path)
+	}
+}
+
 // lifeGone reports whether a dial error means that no process listens.
 func lifeGone(err error) bool {
 	return errors.Is(err, fs.ErrNotExist) || isRefused(err)

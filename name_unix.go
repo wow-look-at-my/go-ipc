@@ -86,6 +86,9 @@ func (l *nameLock) publish(inc string) error {
 	return f.Truncate(int64(len(inc)))
 }
 
+// withdraw has nothing to do. unlinkName removes the name file itself.
+func (l *nameLock) withdraw() error { return nil }
+
 func (l *nameLock) release() error { return l.f.Close() }
 
 // readName returns the instance a name points at.
@@ -159,19 +162,6 @@ func sweepDir(dir string) {
 			continue
 		}
 		sweepName(name)
-	}
-}
-
-// sweepLife removes the life socket of a process that has exited. Nothing
-// listens there, so a dial is refused.
-func sweepLife(path string) {
-	conn, err := net.Dial("unix", path)
-	if err == nil {
-		conn.Close()
-		return
-	}
-	if isRefused(err) {
-		os.Remove(path)
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"golang.org/x/sys/windows"
 )
@@ -15,7 +17,7 @@ import (
 const nameOutlivesHolder = false
 
 func namePath(name string) string {
-	return filepath.Join(os.TempDir(), "go-ipc-"+name+".name")
+	return filepath.Join(runtimeDir(), "go-ipc-"+name+".name")
 }
 
 // A nameLock holds a name. The creator opens the name file with no write
@@ -58,6 +60,10 @@ func (l *nameLock) publish(inc string) error {
 	return l.f.Truncate(int64(len(inc)))
 }
 
+// withdraw empties the name file. The file stays until its holder closes it,
+// so the empty name is how a sender learns that the receiver unlinked.
+func (l *nameLock) withdraw() error { return l.f.Truncate(0) }
+
 func (l *nameLock) release() error { return l.f.Close() }
 
 func readName(name string) (string, error) {
@@ -95,5 +101,20 @@ func readName(name string) (string, error) {
 // unlinkName has nothing to do. The name file goes away with its holder.
 func unlinkName(string, string) error { return nil }
 
-// sweepStale has nothing to do. Every object dies with its last handle.
-func sweepStale() {}
+var sweepOnce sync.Once
+
+// sweepStale removes the life sockets of processes that have exited. Every
+// other object dies with its last handle.
+func sweepStale() {
+	sweepOnce.Do(func() {
+		entries, err := os.ReadDir(runtimeDir())
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "go-ipc-life-") && strings.HasSuffix(entry.Name(), ".sock") {
+				sweepLife(filepath.Join(runtimeDir(), entry.Name()))
+			}
+		}
+	})
+}

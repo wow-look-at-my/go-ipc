@@ -609,6 +609,8 @@ func (q *Queue) Close() error {
 		if cerr := q.lock.release(); err == nil {
 			err = cerr
 		}
+		// A released name has nothing left for Unlink to withdraw.
+		q.lock = nil
 	}
 	return err
 }
@@ -619,6 +621,11 @@ func (q *Queue) Unlink() error {
 	err := removeInstance(q.name, q.inc)
 	if uerr := unlinkName(q.name, q.inc); err == nil {
 		err = uerr
+	}
+	if q.lock != nil {
+		if werr := q.lock.withdraw(); err == nil {
+			err = werr
+		}
 	}
 	return err
 }
