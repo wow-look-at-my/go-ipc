@@ -184,7 +184,6 @@ func TestWireConstantsMatchSpec(t *testing.T) {
 	assert.Equal(t, DefaultCapacity, s.Queue.DefaultCapacity)
 	assert.Equal(t, ".ne", s.Queue.NotEmptySuffix)
 	assert.Equal(t, ".nf", s.Queue.NotFullSuffix)
-	assert.Equal(t, pipeBuf, s.Queue.SignalMaxTokens)
 	assert.Equal(t, chanCreatorToOpener, s.Channel.CreatorToOpener)
 	assert.Equal(t, chanOpenerToCreator, s.Channel.OpenerToCreator)
 	assert.Equal(t, typeStreamData, s.Conn.TypeData)

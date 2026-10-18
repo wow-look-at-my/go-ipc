@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"sync"
 	"sync/atomic"
 )
@@ -89,8 +88,7 @@ func (q *Queue) watchPeer(id procID) error {
 
 // receiverUnlinked reports whether the receiver removed the queue's name, which it does on its way out.
 func (q *Queue) receiverUnlinked() bool {
-	_, err := os.Stat(namePath(q.name))
-	return errors.Is(err, fs.ErrNotExist)
+	return nameGone(q.name)
 }
 
 // sawPeerGone records a wait that reported the receiver gone. The watch
