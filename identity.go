@@ -1,4 +1,4 @@
-//go:build !js && !wasip1
+//go:build cosmo || darwin || linux || windows
 
 package ipc
 
@@ -39,6 +39,19 @@ var errNotWatchable = errors.New("ipc: process cannot be watched")
 
 func lifePath(id procID) string {
 	return filepath.Join(lifeDir(), fmt.Sprintf("go-ipc-life-%016x.sock", uint64(id)))
+}
+
+// sweepLife removes the life socket of a process that has exited. Nothing
+// listens there, so a dial is refused.
+func sweepLife(path string) {
+	conn, err := net.Dial("unix", path)
+	if err == nil {
+		conn.Close()
+		return
+	}
+	if isRefused(err) {
+		os.Remove(path)
+	}
 }
 
 var self struct {
@@ -122,19 +135,6 @@ func isDead(id procID) bool {
 		return false
 	}
 	return lifeGone(err)
-}
-
-// sweepLife removes the life socket of a process that has exited. Nothing
-// listens there, so a dial is refused.
-func sweepLife(path string) {
-	conn, err := net.Dial("unix", path)
-	if err == nil {
-		conn.Close()
-		return
-	}
-	if isRefused(err) {
-		os.Remove(path)
-	}
 }
 
 // lifeGone reports whether a dial error means that no process listens.

@@ -1,6 +1,4 @@
-// WebAssembly has no second process and no shared memory, so no file of this
-// package builds there.
-//go:build !js && !wasip1
+//go:build cosmo || darwin || linux || windows
 
 // Package ipc provides shared-memory interprocess communication without cgo.
 //

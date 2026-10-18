@@ -1,4 +1,4 @@
-//go:build !js && !wasip1
+//go:build cosmo || darwin || linux || windows
 
 package ipc
 
@@ -277,6 +277,9 @@ func TestSendReportsUnlinkedReceiver(t *testing.T) {
 	}
 
 	require.NoError(t, q.Unlink())
+	require.True(t, sender.receiverUnlinked(), "Unlink removes the name while the receiver still holds it")
+	_, err = OpenQueue(name)
+	require.ErrorIs(t, err, fs.ErrNotExist)
 	assert.ErrorIs(t, sender.Send(testContext(t), payload), ErrPeerGone)
 	_, err = sender.Claim(testContext(t), 0, len(payload))
 	assert.ErrorIs(t, err, ErrPeerGone)

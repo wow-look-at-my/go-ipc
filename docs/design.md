@@ -23,7 +23,9 @@ A queue name points at an instance. The instance id is random hex digits. It is 
 
 `CreateQueue` takes an exclusive lock on the name file, and holds it for the life of the queue. On Unix that is a `flock`. On Windows the creator opens the file with no write sharing and with delete-on-close. The kernel drops either lock when the creator exits. A second creator therefore gets `ErrInUse` while the first one lives, and gets the name when it does not.
 
-The creator then removes the instance the name names, if any, and builds a new one. It writes the new id into the `.inc` file last. The id is not in the locked file. On a Windows host a cosmo `flock` is a mandatory lock. A reader of the locked file gets `EACCES`. An opener reads the id, then opens the instance. So an opener never sees a half-built instance. A stale instance is never reused, because its senders may still hold it.
+The creator then removes the instance the name names, if any, and builds a new one. It writes the new id into the `.inc` file last. The id is not in the locked file. On a Windows host a cosmo `flock` is a mandatory lock. A reader of the locked file gets `EACCES`. An opener reads the id, then opens the instance.
+
+So an opener never sees a half-built instance. A stale instance is never reused, because its senders may still hold it.
 
 A process killed before `Unlink` leaves its instance behind. On Linux that is memory in `/dev/shm`. The first `CreateQueue` or `CreateChannel` in each process sweeps the runtime directory. It removes every name file that no live process holds, with the instance it names. Windows needs no sweep: every object dies with its last handle.
 
@@ -72,7 +74,7 @@ The consumer zeroes every byte it consumes before it advances `head`, not just t
 
 ## Wrapping
 
-A record never straddles the end of the data region. The reader must be able to take one contiguous slice.
+A record never straddles the end of the data region. The reader must be able to take one adjacent slice.
 
 A claim that crosses the end is handled in one step. The producer claims the remaining bytes as well. It fills them with a padding record, which carries the reserved type `0xFFFFFFFF`. The reader skips padding and does not report it.
 
@@ -82,7 +84,7 @@ A claim that crosses the end is handled in one step. The producer claims the rem
 
 A producer claims by compare-and-swap on `tail`. A failed swap means that another producer claimed first. The retry is therefore bounded by real progress somewhere. This is a lock-free retry, not a wait. No producer blocks on another producer that the scheduler stopped in the middle of a claim.
 
-There is exactly one consumer. It needs no atomic operation to find the next record beyond the acquire load of the length. It advances `head` with a single store.
+There is exactly one consumer. It needs no atomic operation to find the next record beyond the get load of the length. It advances `head` with a single store.
 
 Only the handle `CreateQueue` returns may receive. Any other handle gets `ErrNotConsumer`. The receiving handle runs its receives one at a time, so concurrent calls to `Recv` share the queue safely.
 
@@ -124,7 +126,7 @@ A process that runs out of free slots takes the slot of a dead owner, once that 
 The `consumer` field holds the procID of the process that reads the queue. A sender checks it on every operation.
 
 - `0` means the reader closed. The sender gets `ErrPeerGone`.
-- A procID gets a watch on that process, the first time the sender sees it: a connection to its life socket. When the process exits, the watch marks the peer gone and wakes every sender this process has parked on the queue.
+- A procID gets a watch on that process, the first time the sender sees it: a connection to its life socket. When the process exits, the watch marks the peer gone and wakes every sender this process parked on the queue.
 - The value `1` means a channel direction whose peer has not connected. Sends go through and wait in the ring.
 
 A process that is already dead is reported at once.
@@ -144,9 +146,9 @@ A side that cannot proceed follows this sequence:
 
 A side that makes progress reads the opposite waiter count after it publishes its change. It signals only when that count is above zero.
 
-The repeated attempt is what makes this safe. The waiter's increment and the peer's read of that counter are both sequentially consistent. So are the ring cursor updates. Each side therefore sees the other. Either the peer's change is visible to the waiter, or the waiter is visible to the peer. No wakeup falls between them.
+The repeated try is what makes this safe. The waiter's increment and the peer's read of that counter are both sequentially consistent. So are the ring cursor updates. Each side therefore sees the other. Either the peer's change is visible to the waiter, or the waiter is visible to the peer. No wakeup falls between them.
 
-A wakeup is also allowed to be wrong in the harmless direction. The event keeps a signal that finds no waiter. It hands that signal to the next waiter. A waiter that wakes with nothing to do loops back to the first step. Only a lost wakeup is a defect, and the sequence above rules that out.
+A wakeup is also allowed to be incorrect in the harmless direction. The event keeps a signal that finds no waiter. It hands that signal to the next waiter. A waiter that wakes with nothing to do loops back to the first step. Only a lost wakeup is a defect, and the sequence above rules that out.
 
 ## Why nothing spins
 
@@ -154,7 +156,7 @@ An earlier draft of this package spun for a while before it parked. That code is
 
 A spin in user space is a bet that the peer runs on another core right now. The bet loses when the peer does not. The spinner then holds a core for its whole timeslice. The peer it waits for cannot get scheduled onto that core. The load where IPC latency matters most is exactly the load where this bet loses. [This thread](https://www.realworldtech.com/forum/?threadid=189711&curpostid=189723) gives the argument in full.
 
-The same reasoning rules out a sleep for a guessed interval. Such a sleep is wrong in both directions at once. Too long and the message waits. Too short and it is a spin with extra steps.
+The same reasoning rules out a sleep for a guessed interval. Such a sleep is incorrect in both directions at once. Too long and the message waits. Too short and it is a spin with extra steps.
 
 One honest option is left. Tell the kernel what you wait for. Let the kernel decide when to run you.
 
@@ -170,19 +172,23 @@ A signal writes one byte per waiter through a raw non-blocking write. A full pip
 
 A waiter reads the FIFO itself, through a handle of its own. It takes that handle from a free list and returns it on the way out. Cancellation then sets a read deadline on the private handle, which aborts this read and touches no other reader. A deadline on a shared handle aborts every reader of it.
 
-A token is consumed only by a read that returns it. A cancelled wait therefore swallows no wakeup. A signal that arrives before any waiter stays in the pipe until a waiter reads it.
+A read that returns it consums a token. A cancelled wait therefore swallows no wakeup. A signal that arrives before any waiter stays in the pipe until a waiter reads it.
 
 An earlier design put a reader goroutine per event in front of the waiters and handed tokens on over a channel. That code is gone. It cost a pair of goroutine handoffs on every wakeup, measured at several microseconds per round trip on the development machine. It also carried a defect that the current design cannot express. A reader that ran while its own process had no waiter took a wakeup that a waiter in another process needed, and stranded it.
 
 On Windows an event is a named semaphore. A waiter calls `WaitForMultipleObjects` over that semaphore, a shared close handle, and a cancel handle of its own. This wait does occupy a thread for its duration, which the Unix poller avoids. The Go runtime hands the processor to another thread meanwhile, so other goroutines keep running.
 
-A cosmo binary on a Windows host has no FIFOs, because `mkfifo` fails there. Its events use a Unix socket instead (`event_sock.go`). The creator listens on the socket and keeps the token count. Each handle, the creator's own included, connects once at open and keeps that connection, so an unlinked event still takes a new waiter. A waiter sends a wait request on it. The creator answers with a token when one is free. The handle gives it to its oldest waiter. A signal adds tokens on the same connection. A cancelled waiter sends a cancel, which drops one queued request of the connection. When none is queued, its token is already on the way, and the handle sends that token back. So no token is stranded in a process with no waiter, which was the defect of the old FIFO reader goroutine. The socket name is a hash of the event path, because a socket path must fit in `sun_path`.
+A cosmo binary on a Windows host has no FIFOs, because `mkfifo` fails there. Its events use a Unix socket instead (`event_sock.go`). The creator listens on the socket and keeps the token count. Each handle, the creator's own included, connects once at open and keeps that connection, so an unlinked event still takes a new waiter. A waiter sends a wait request on it. The creator answers with a token when one is free.
+
+The handle gives it to its oldest waiter. A signal adds tokens on the same connection. A cancelled waiter sends a cancel, which drops one queued request of the connection. When none is queued, its token is already on the way, and the handle sends that token back. So no token is stranded in a process with no waiter, which was the defect of the old FIFO reader goroutine. The socket name is a hash of the event path, because a socket path must fit in `sun_path`.
 
 When the creator exits or closes, every waiter connection breaks. The wait then reports `ErrPeerGone`, because nobody can signal the event after that. A signal to a dead creator is dropped, the same as a write to a FIFO that nobody reads. An open checks the path with `Lstat`. A dial cannot tell a dead creator from a missing path, because Windows refuses both. `Lstat` fails with `ENOENT` only when the path is gone.
 
 ## Closing
 
-Every queue operation registers against the mapping before it touches shared memory. `Close` sets a closing flag. The receiving handle then clears `consumer` and wakes the parked senders, which find `ErrPeerGone`. `Close` cancels its watches. It closes both events, which releases whatever parked on them. It waits for the in-flight count to reach zero. It returns its claim slots and unmaps the segment. Last, it releases the name.
+Every queue operation registers against the mapping before it touches shared memory. `Close` sets a closing flag. The receiving handle then clears `consumer` and wakes the parked senders, which find `ErrPeerGone`. `Close` cancels its watches. It closes both events, which releases whatever parked on them. It waits for the in-flight count to reach zero.
+
+It returns its claim slots and unmaps the segment. Last, it releases the name.
 
 Without that guard, a `Close` on one goroutine pulls the mapping out from under a `Send` parked on another. The process then faults on the next atomic. The ordering argument is the one the wakeup protocol uses. The closing flag and the in-flight counter are both sequentially consistent. An operation therefore either backs out or gets waited for.
 

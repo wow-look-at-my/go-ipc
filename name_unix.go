@@ -23,6 +23,9 @@ const (
 // nameOutlivesHolder is true: the name stays until a sweep or a new creator replaces it.
 const nameOutlivesHolder = true
 
+// nameGone reports whether err, from a stat of a name file, means the name is gone.
+func nameGone(err error) bool { return errors.Is(err, fs.ErrNotExist) }
+
 func namePath(name string) string {
 	return filepath.Join(runtimeDir(), namePrefix+name+nameSuffix)
 }
@@ -85,10 +88,10 @@ func (l *nameLock) publish(inc string) error {
 	return f.Truncate(int64(len(inc)))
 }
 
-// withdraw has nothing to do. unlinkName removes the name file itself.
-func (l *nameLock) withdraw() error { return nil }
-
 func (l *nameLock) release() error { return l.f.Close() }
+
+// unlink has nothing to do. unlinkName removes the name file by its path.
+func (l *nameLock) unlink() error { return nil }
 
 // readName returns the instance a name points at.
 func readName(name string) (string, error) {
@@ -163,6 +166,7 @@ func sweepDir(dir string) {
 		sweepName(name)
 	}
 }
+
 
 // sweepName removes a name that no live process holds. The cleanup is on
 // behalf of processes that are gone. A failure costs this caller nothing, and

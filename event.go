@@ -1,4 +1,4 @@
-//go:build !js && !wasip1
+//go:build cosmo || darwin || linux || windows
 
 package ipc
 
@@ -6,6 +6,9 @@ import (
 	"context"
 	"sync"
 )
+
+// pipeBuf is the largest write a pipe guarantees to deliver atomically.
+const pipeBuf = 4096
 
 // An Event is a named wake channel between processes.
 type Event struct {

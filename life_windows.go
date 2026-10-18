@@ -3,7 +3,6 @@ package ipc
 import (
 	"errors"
 	"net"
-	"os"
 
 	"golang.org/x/sys/windows"
 )

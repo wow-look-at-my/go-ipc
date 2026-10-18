@@ -1,4 +1,4 @@
-//go:build !js && !wasip1
+//go:build cosmo || darwin || linux || windows
 
 package ipc
 
@@ -609,8 +609,6 @@ func (q *Queue) Close() error {
 		if cerr := q.lock.release(); err == nil {
 			err = cerr
 		}
-		// A released name has nothing left for Unlink to withdraw.
-		q.lock = nil
 	}
 	return err
 }
@@ -623,8 +621,8 @@ func (q *Queue) Unlink() error {
 		err = uerr
 	}
 	if q.lock != nil {
-		if werr := q.lock.withdraw(); err == nil {
-			err = werr
+		if uerr := q.lock.unlink(); err == nil {
+			err = uerr
 		}
 	}
 	return err

@@ -6,9 +6,10 @@ import (
 	"sync"
 )
 
-// runtimeDir holds the name files and the sockets that track live processes.
-// A life socket outlives its process on Windows, and a sweep removes it. It
-// is a per-user directory, so it stays out of the TEMP of the program.
+// runtimeDir holds every file of this package: events, names and life
+// sockets. It is not TMPDIR, because a process that exits without Release
+// leaves its life socket behind, and a test harness that wants an empty
+// TMPDIR at exit then fails on it.
 func runtimeDir() string {
 	dirOnce.Do(func() {
 		base, err := os.UserCacheDir()

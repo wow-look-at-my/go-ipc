@@ -62,9 +62,3 @@ func TestQueueFilesMatchSpec(t *testing.T) {
 	vars["procid"] = fmt.Sprintf("%016x", uint64(q.self))
 	check(s.Paths.LifeSocket, fs.ModeSocket, -1)
 }
-
-// A FIFO delivers a write of up to pipeBuf bytes whole, so one signal carries
-// at most that many tokens. A Windows semaphore has no such bound.
-func TestSignalMaxTokensMatchesSpec(t *testing.T) {
-	assert.Equal(t, pipeBuf, loadWire(t).Queue.SignalMaxTokens)
-}

@@ -1,5 +1,4 @@
-// WebAssembly has no file lock call, so no file of this package builds there.
-//go:build !js && !wasip1
+//go:build cosmo || darwin || linux || windows
 
 // Package filelock is the OS file lock: flock on unix, LockFileEx on Windows.
 // It imports no net, so a program that must not link net can take the lock.

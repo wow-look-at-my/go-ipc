@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -20,10 +21,20 @@ func namePath(name string) string {
 	return filepath.Join(runtimeDir(), "go-ipc-"+name+".name")
 }
 
+// nameGone reports whether err, from a stat of a name file, means the name is
+// gone.
+func nameGone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_DELETE_PENDING)
+}
+
 // A nameLock holds a name. The creator opens the name file with no write
 // sharing and with delete-on-close.
 type nameLock struct {
 	f *os.File
+
+	mu sync.Mutex
+	// gone is set once the name file has left its directory.
+	gone bool
 }
 
 func lockName(name string) (*nameLock, error) {
@@ -33,7 +44,7 @@ func lockName(name string) (*nameLock, error) {
 		return nil, err
 	}
 	h, err := windows.CreateFile(wide,
-		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.GENERIC_READ|windows.GENERIC_WRITE|windows.DELETE,
 		windows.FILE_SHARE_READ,
 		nil,
 		windows.OPEN_ALWAYS,
@@ -60,11 +71,30 @@ func (l *nameLock) publish(inc string) error {
 	return l.f.Truncate(int64(len(inc)))
 }
 
-// withdraw empties the name file. The file stays until its holder closes it,
-// so the empty name is how a sender learns that the receiver unlinked.
-func (l *nameLock) withdraw() error { return l.f.Truncate(0) }
+func (l *nameLock) release() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.gone = true
+	return l.f.Close()
+}
 
-func (l *nameLock) release() error { return l.f.Close() }
+// unlink removes the name file from its directory while the holder keeps the
+// handle open. With POSIX semantics the name goes now, not at the last close.
+func (l *nameLock) unlink() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.gone {
+		return nil
+	}
+	flags := uint32(windows.FILE_DISPOSITION_DELETE | windows.FILE_DISPOSITION_POSIX_SEMANTICS)
+	err := windows.SetFileInformationByHandle(windows.Handle(l.f.Fd()), windows.FileDispositionInfoEx,
+		(*byte)(unsafe.Pointer(&flags)), uint32(unsafe.Sizeof(flags)))
+	if err != nil {
+		return &os.PathError{Op: "unlink", Path: l.f.Name(), Err: err}
+	}
+	l.gone = true
+	return nil
+}
 
 func readName(name string) (string, error) {
 	path := namePath(name)
@@ -98,7 +128,7 @@ func readName(name string) (string, error) {
 	return inc, nil
 }
 
-// unlinkName has nothing to do. The name file goes away with its holder.
+// unlinkName has nothing to do. Only the holder can remove the name file, and it does so through nameLock.unlink.
 func unlinkName(string, string) error { return nil }
 
 var sweepOnce sync.Once
