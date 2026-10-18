@@ -1,3 +1,5 @@
+//go:build !js && !wasip1
+
 package ipc
 
 import (
@@ -5,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 )
@@ -314,11 +317,15 @@ func (s *Service) Wait() error {
 // service name. A client that created its channel before the service existed
 // is found here.
 func scanClients(name string) []string {
-	prefix := name + serviceClientPrefix
-	suffix := chanOpenerToCreator
+	entries, err := os.ReadDir(runtimeDir())
+	if err != nil {
+		return nil
+	}
+	prefix := "go-ipc-" + name + serviceClientPrefix
+	suffix := chanOpenerToCreator + ".name"
 	var ids []string
-	for _, held := range nameList() {
-		rest, ok := strings.CutPrefix(held, prefix)
+	for _, entry := range entries {
+		rest, ok := strings.CutPrefix(entry.Name(), prefix)
 		if !ok {
 			continue
 		}

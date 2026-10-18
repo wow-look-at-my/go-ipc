@@ -1,9 +1,12 @@
+//go:build !js && !wasip1
+
 package ipc
 
 import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"sync"
 	"sync/atomic"
 )
@@ -88,7 +91,8 @@ func (q *Queue) watchPeer(id procID) error {
 
 // receiverUnlinked reports whether the receiver removed the queue's name, which it does on its way out.
 func (q *Queue) receiverUnlinked() bool {
-	return nameGone(q.name)
+	_, err := os.Stat(namePath(q.name))
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // sawPeerGone records a wait that reported the receiver gone. The watch

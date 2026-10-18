@@ -1,3 +1,5 @@
+//go:build !js && !wasip1
+
 package ipc
 
 import (
@@ -49,7 +51,6 @@ func childRelease() error {
 }
 
 func TestReleaseRemovesLifeSocket(t *testing.T) {
-	needProcesses(t)
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), childRoleEnv+"=release")
 	cmd.Stderr = os.Stderr

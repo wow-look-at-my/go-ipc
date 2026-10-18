@@ -1,3 +1,5 @@
+//go:build !js && !wasip1
+
 package filelock
 
 import (
@@ -15,7 +17,6 @@ func TestImportsNoNet(t *testing.T) {
 		"github.com/wow-look-at-my/go-containers/set",
 		"errors",
 		"os",
-		"sync",
 		"golang.org/x/sys/unix",
 		"syscall",
 		"unsafe",
@@ -24,7 +25,7 @@ func TestImportsNoNet(t *testing.T) {
 		"go/build",
 		"testing")
 
-	for _, goos := range []string{"linux", "darwin", "windows", "freebsd", "js", "wasip1"} {
+	for _, goos := range []string{"linux", "darwin", "windows", "freebsd"} {
 		ctx := build.Default
 		ctx.GOOS = goos
 		pkg, err := ctx.ImportDir(".", 0)

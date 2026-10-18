@@ -1,3 +1,5 @@
+//go:build !js && !wasip1
+
 package ipc
 
 import (
@@ -8,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -208,21 +209,10 @@ func readyThenWait() error {
 	return err
 }
 
-// needProcesses skips a test that starts a child, where no process can start.
-// WebAssembly cannot start one on js or wasip1. The Go standard library skips
-// its own such tests there the same way, with testenv.MustHaveExec.
-func needProcesses(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
-		t.Skipf("%s/%s cannot start a subprocess", runtime.GOOS, runtime.GOARCH)
-	}
-}
-
 // startPeer starts a child in the given role and waits for it to report
 // ready. Closing the returned pipe lets the child go on.
 func startPeer(t *testing.T, role, name string) (*exec.Cmd, io.WriteCloser) {
 	t.Helper()
-	needProcesses(t)
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), childRoleEnv+"="+role, childNameEnv+"="+name)
 	cmd.Stderr = os.Stderr
@@ -252,7 +242,6 @@ func kill(t *testing.T, cmd *exec.Cmd) {
 // the returned pipe lets it exit.
 func startIdent(t *testing.T) (*exec.Cmd, procID, io.WriteCloser) {
 	t.Helper()
-	needProcesses(t)
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), childRoleEnv+"=ident")
 	cmd.Stderr = os.Stderr
@@ -288,7 +277,6 @@ func deadProcID(t *testing.T) procID {
 // startChild re-executes this binary in the given role.
 func startChild(t *testing.T, role, name string, count int) *exec.Cmd {
 	t.Helper()
-	needProcesses(t)
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(),
 		childRoleEnv+"="+role,

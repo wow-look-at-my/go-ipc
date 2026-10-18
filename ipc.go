@@ -1,3 +1,7 @@
+// WebAssembly has no second process and no shared memory, so no file of this
+// package builds there.
+//go:build !js && !wasip1
+
 // Package ipc provides shared-memory interprocess communication without cgo.
 //
 // [Ring] is a lock-free multi-producer single-consumer buffer of
