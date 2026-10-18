@@ -1,3 +1,5 @@
+//go:build cosmo || darwin || linux || windows
+
 // Package ipc provides shared-memory interprocess communication without cgo.
 //
 // [Ring] is a lock-free multi-producer single-consumer buffer of
