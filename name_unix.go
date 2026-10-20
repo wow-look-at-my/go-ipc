@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -165,19 +164,6 @@ func sweepDir(dir string) {
 			continue
 		}
 		sweepName(name)
-	}
-}
-
-// sweepLife removes the life socket of a process that has exited. Nothing
-// listens there, so a dial is refused.
-func sweepLife(path string) {
-	conn, err := net.Dial("unix", path)
-	if err == nil {
-		conn.Close()
-		return
-	}
-	if isRefused(err) {
-		os.Remove(path)
 	}
 }
 

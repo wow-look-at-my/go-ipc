@@ -52,7 +52,7 @@ err = q.Send(ctx, []byte("work item"))
 - On a `Channel` or `Conn`, the other side gets every message the dead peer sent, then `ErrPeerGone`.
 - `CreateQueue` returns `ErrInUse` while a live process holds the name. It replaces an instance whose creator died, and the first create in a process sweeps what crashed processes left behind.
 
-Death is detected through a socket the kernel closes when the process exits, not by a poll or a timeout. See [docs/design.md](docs/design.md). Call `ipc.Release()` just before exit to remove that socket file yourself.
+A poll or a timeout detects Death. See [docs/design.md](docs/design.md). Call `ipc.Release()` just before exit to remove that socket file yourself.
 
 ## Streams
 
@@ -119,7 +119,7 @@ The event keeps a signal that arrives before its waiter. A check-then-wait seque
 
 A send into a queue with room makes no system call. Neither does a receive from a queue that holds a message. Both are a few atomic operations on shared memory. A system call happens only when a side has to sleep, or when a sleeping peer has to be woken.
 
-Nothing spins, by design. A spin in user space burns a whole timeslice whenever the peer that holds the data is not running. That is the case a busy IPC path hits under load. See [this thread](https://www.realworldtech.com/forum/?threadid=189711&curpostid=189723) for the argument in full.
+Nothing spins, by design. A spin in user space burns a whole timeslice when the peer that holds the data is not running. That is the case a busy IPC path hits under load. See [this thread](https://www.realworldtech.com/forum/?threadid=189711&curpostid=189723) for the argument in full.
 
 The test suite holds this package to that claim. `TestBlockedEndpointsConsumeNoCPU` measures the processor time of a process whose endpoints are all parked. `TestParkedWaitersHoldNoThreads` counts the OS threads that parked waiters occupy.
 
@@ -134,7 +134,7 @@ EventPingPong          3911 ns/op   4 allocs/op   # the wake primitive alone
 QueuePingPong          4748 ns/op   4 allocs/op   # parks on every message
 ```
 
-The ring is the fast path and costs no system call. Everything above a microsecond is the wakeup, and a wakeup happens whenever a side finds nothing to do. A consumer that outruns its producer therefore parks on almost every message, and pays for it. `ReadBatch` is the answer when a burst exists, because it amortizes one wakeup over the whole batch.
+The ring is the fast path and costs no system call. Everything above a microsecond is the wakeup, and a wakeup happens when a side finds nothing to do. A consumer that outruns its producer therefore parks on almost every message, and pays for it. `ReadBatch` is the answer when a burst exists, because it amortizes one wakeup over the whole batch.
 
 ## Other languages
 

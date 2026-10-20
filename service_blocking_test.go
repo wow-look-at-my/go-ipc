@@ -16,7 +16,8 @@ import (
 // process spends in that window is compared against the window itself.
 func TestParkedCallConsumesNoCPU(t *testing.T) {
 	const (
-		window = 300 * time.Millisecond
+		// Windows counts processor time in 15.625ms ticks. The window holds the budget to several ticks, not one.
+		window = time.Second
 		budget = window / 10
 	)
 	name := uniqueName(t)

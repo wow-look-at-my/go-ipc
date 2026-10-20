@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -130,5 +131,20 @@ func readName(name string) (string, error) {
 // unlinkName has nothing to do. Only the holder can remove the name file, and it does so through nameLock.unlink.
 func unlinkName(string, string) error { return nil }
 
-// sweepStale has nothing to do. Every object dies with its last handle.
-func sweepStale() {}
+var sweepOnce sync.Once
+
+// sweepStale removes the life sockets of processes that have exited. Every
+// other object dies with its last handle.
+func sweepStale() {
+	sweepOnce.Do(func() {
+		entries, err := os.ReadDir(runtimeDir())
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "go-ipc-life-") && strings.HasSuffix(entry.Name(), ".sock") {
+				sweepLife(filepath.Join(runtimeDir(), entry.Name()))
+			}
+		}
+	})
+}
