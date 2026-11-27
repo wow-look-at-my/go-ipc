@@ -29,7 +29,7 @@ So an opener never sees a half-built instance. A stale instance is never reused,
 
 A process killed before `Unlink` leaves its instance behind. On Linux that is memory in `/dev/shm`. The first `CreateQueue` or `CreateChannel` in each process sweeps the runtime directory. It removes every name file that no live process holds, with the instance it names. Windows needs no sweep: every object dies with its last handle.
 
-The sweep takes each lock for a moment. A creator that races it on a stale name can get `ErrInUse`, and succeeds when it tries again.
+The sweep takes each lock for a moment. A creator that races it on a stale name can get `ErrInUse`, and succeeds when it tries again. The sweep takes a lock only on a name file that exists, and never makes one. A name that its owner removed therefore does not come back for a moment under a sweep that listed it earlier.
 
 ## Ring layout
 
