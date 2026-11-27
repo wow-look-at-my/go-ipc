@@ -123,12 +123,14 @@ func readName(name string) (string, error) {
 // unlinkName removes the name file while it still points at inc. A newer
 // instance under the same name keeps its file.
 //
-// own is the caller's lock on the name. A caller that no longer holds it
-// takes the name first. A successor can hold the name and not have
-// published its instance yet. The file still points at inc then, and
-// removing it takes the name from under the successor.
+// own is the lock of a caller that created the name, and nil for one that
+// opened it. A creator that let its lock go takes the name first: whoever
+// holds it now is a successor. This may not have published its instance yet.
+// The file still points at inc then, and removing it takes the name from
+// under the successor. An opener removes the name of a live creator, as
+// before.
 func unlinkName(name, inc string, own *nameLock) error {
-	if !own.held() {
+	if own != nil && !own.held() {
 		if _, err := os.Stat(namePath(name)); errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
