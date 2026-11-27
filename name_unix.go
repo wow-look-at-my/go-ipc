@@ -180,6 +180,10 @@ func sweepDir(dir string) {
 			sweepLife(filepath.Join(dir, entry.Name()))
 			continue
 		}
+		if seg, ok := strings.CutPrefix(entry.Name(), segmentPrefix); ok {
+			built.add(seg, sawSegment)
+			continue
+		}
 		name, ok := strings.CutPrefix(entry.Name(), namePrefix)
 		if !ok {
 			continue
@@ -197,34 +201,43 @@ func sweepDir(dir string) {
 		names = append(names, name)
 	}
 	for _, name := range names {
-		sweepName(name, built.of(name)...)
+		sweepName(name, built.of(name, true)...)
 		// A name with a file is settled here, whether the lock was free.
 		delete(built, name)
 	}
 	for name := range built {
-		sweepUnnamed(name, built.of(name))
+		sweepUnnamed(name, built.of(name, false))
 	}
 }
 
-// builtInstances maps a name to the instances whose events are in the directory.
+// segmentPrefix starts the file name of a segment, where a host keeps segments as files.
+const segmentPrefix = "go-shm-"
+
+// builtInstances maps a name to the instances whose files are in the directory.
 type builtInstances map[string]map[string]int
 
 const (
 	sawNotEmpty = 1 << iota
 	sawNotFull
+	sawSegment
 )
 
 // note records entry when it is the event of an instance. entry is a file
 // name without the prefix that every file of this package has.
 func (b builtInstances) note(entry string) bool {
-	saw := sawNotEmpty
-	base, ok := strings.CutSuffix(entry, ".ne.event")
-	if !ok {
-		saw = sawNotFull
-		base, ok = strings.CutSuffix(entry, ".nf.event")
+	if base, ok := strings.CutSuffix(entry, ".ne.event"); ok {
+		return b.add(base, sawNotEmpty)
 	}
+	if base, ok := strings.CutSuffix(entry, ".nf.event"); ok {
+		return b.add(base, sawNotFull)
+	}
+	return false
+}
+
+// add records base when it reads as a name, a dot and an instance id.
+func (b builtInstances) add(base string, saw int) bool {
 	cut := len(base) - incarnationLen
-	if !ok || cut < 2 || base[cut-1] != '.' {
+	if cut < 2 || base[cut-1] != '.' {
 		return false
 	}
 	inc, ok := parseIncarnation([]byte(base[cut:]))
@@ -239,12 +252,14 @@ func (b builtInstances) note(entry string) bool {
 	return true
 }
 
-// of returns the instances of name that have both events. One event alone
-// can be an event a caller made under a name of that shape.
-func (b builtInstances) of(name string) []string {
+// of returns the instances of name that have both events. One event alone can
+// be an event a caller made under a name of that shape. With segments, an
+// instance that shows only its segment counts too: the holder of a name owns
+// the segments under it.
+func (b builtInstances) of(name string, segments bool) []string {
 	var incs []string
 	for inc, saw := range b[name] {
-		if saw == sawNotEmpty|sawNotFull {
+		if saw&(sawNotEmpty|sawNotFull) == sawNotEmpty|sawNotFull || (segments && saw&sawSegment != 0) {
 			incs = append(incs, inc)
 		}
 	}

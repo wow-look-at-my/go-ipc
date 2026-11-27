@@ -106,8 +106,9 @@ func TestSweepRemovesAnInstanceItsCreatorNeverPublished(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { removeName(name) })
 	abandonBuild(t, name)
+	// A host whose events are sockets shows the name file and the segment. Another host shows both events too.
 	before := filesOf(t, name)
-	require.Len(t, before, 4, "the name file, two events and the segment")
+	require.GreaterOrEqual(t, len(before), 2, "the name file and the segment")
 
 	sweepDir(runtimeDir())
 	assert.Equal(t, before, filesOf(t, name), "the sweep took the instance of a live creator")
@@ -117,15 +118,37 @@ func TestSweepRemovesAnInstanceItsCreatorNeverPublished(t *testing.T) {
 	assert.Empty(t, filesOf(t, name))
 }
 
-func TestSweepRemovesAnInstanceWithNoNameFile(t *testing.T) {
+// TestSweepFindsAnUnpublishedInstanceByItsSegment runs the events on sockets,
+// as a Windows host does. The sweep then has only the segment to go by.
+func TestSweepFindsAnUnpublishedInstanceByItsSegment(t *testing.T) {
+	useSockEvents(t)
 	name := uniqueName(t)
+	lock, err := lockName(name)
+	require.NoError(t, err)
+	t.Cleanup(func() { removeName(name) })
 	abandonBuild(t, name)
-	require.Len(t, filesOf(t, name), 3, "two events and the segment")
+	require.NoError(t, lock.release())
+	require.Len(t, filesOf(t, name), 2, "the name file and the segment")
 
 	sweepDir(runtimeDir())
 	assert.Empty(t, filesOf(t, name))
+}
+
+func TestSweepRemovesAnInstanceWithNoNameFile(t *testing.T) {
+	name := uniqueName(t)
+	abandonBuild(t, name)
+	before := filesOf(t, name)
+	require.NotEmpty(t, before)
+
+	sweepDir(runtimeDir())
 	_, err := os.Stat(namePath(name))
 	assert.ErrorIs(t, err, fs.ErrNotExist, "the sweep made a name file")
+	if sockHost() {
+		// A socket event has a name that the sweep cannot read, and a segment alone can belong to another user of go-shm.
+		assert.Equal(t, before, filesOf(t, name), "the sweep judged an instance by its segment alone")
+		return
+	}
+	assert.Empty(t, filesOf(t, name))
 }
 
 // TestSweepLeavesAnEventOfThatShape makes one event under a name that reads
@@ -139,8 +162,9 @@ func TestSweepLeavesAnEventOfThatShape(t *testing.T) {
 		e.Unlink()
 	})
 	sweepDir(runtimeDir())
-	_, err = os.Stat(eventPath(name))
+	opened, err := OpenEvent(name)
 	require.NoError(t, err, "the sweep removed an event that is no instance")
+	require.NoError(t, opened.Close())
 }
 
 func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
