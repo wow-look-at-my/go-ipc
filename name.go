@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// name.go holds parseIncarnation.
+
 package ipc
 
 import (

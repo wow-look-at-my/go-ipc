@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// conn.go holds typeStreamData.
+
 package ipc
 
 import (

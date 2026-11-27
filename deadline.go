@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// deadline.go holds deadline.
+
 package ipc
 
 import (

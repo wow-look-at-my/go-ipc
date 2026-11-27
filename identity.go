@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// identity.go holds procID.
+
 package ipc
 
 import (

@@ -1,5 +1,7 @@
 //go:build unix
 
+// life_unix.go holds listenLife.
+
 package ipc
 
 import (

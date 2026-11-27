@@ -1,3 +1,5 @@
+// event_windows.go holds eventImpl.
+
 package ipc
 
 import (

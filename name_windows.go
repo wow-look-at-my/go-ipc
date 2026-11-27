@@ -1,3 +1,5 @@
+// name_windows.go holds nameOutlivesHolder.
+
 package ipc
 
 import (

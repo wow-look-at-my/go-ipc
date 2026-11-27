@@ -1,5 +1,7 @@
 //go:build unix
 
+// event_sock.go holds sockEvent.
+
 package ipc
 
 import (

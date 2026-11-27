@@ -1,5 +1,7 @@
 //go:build unix
 
+// event_unix.go holds eventImpl.
+
 package ipc
 
 import (

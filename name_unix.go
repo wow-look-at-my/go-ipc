@@ -1,5 +1,7 @@
 //go:build unix
 
+// name_unix.go holds nameOutlivesHolder.
+
 package ipc
 
 import (

@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// recover.go holds stall.
+
 package ipc
 
 // A stall is a claim that stops the reader at head: its producer has not

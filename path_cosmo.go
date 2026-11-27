@@ -1,5 +1,7 @@
 //go:build cosmo
 
+// path_cosmo.go holds runtimeDir.
+
 package ipc
 
 import (

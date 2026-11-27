@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// channel.go holds Channel.
+
 package ipc
 
 import (

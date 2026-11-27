@@ -1,3 +1,5 @@
+// event.c holds goipc_event.
+
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

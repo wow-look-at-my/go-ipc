@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// filelock.go holds LockFile.
+
 package ipc
 
 import (

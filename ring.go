@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// ring.go holds ringHeader.
+
 package ipc
 
 import (

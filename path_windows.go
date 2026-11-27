@@ -1,3 +1,5 @@
+// path_windows.go holds runtimeDir.
+
 package ipc
 
 import (

@@ -1,3 +1,5 @@
+// filelock_windows.go holds kernel32.
+
 package filelock
 
 import (

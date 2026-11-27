@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// queue_peer.go holds peerWatch.
+
 package ipc
 
 import (

@@ -1,3 +1,5 @@
+// life_windows.go holds listenLife.
+
 package ipc
 
 import (

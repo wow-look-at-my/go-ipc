@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// queue.go holds Option.
+
 package ipc
 
 import (
