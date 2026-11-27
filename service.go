@@ -210,9 +210,7 @@ func (s *Service) adopt(id string) {
 	s.next++
 	s.sessions[sess] = true
 	s.mu.Unlock()
-	var hello [serviceSeqSize]byte
-	binary.LittleEndian.PutUint64(hello[:], uint64(sess.ordinal))
-	if err := ch.SendTyped(s.ctx, typeServiceHello, hello[:]); err != nil {
+	if err := sendHello(s.ctx, ch, sess.ordinal); err != nil {
 		s.forget(sess)
 		return
 	}
@@ -317,14 +315,18 @@ func (s *Service) Wait() error {
 }
 
 // scanClients lists the ids of the client channels that exist under the
-// service name. A client that created its channel before the service existed
-// is found here.
+// service name.
 func scanClients(name string) []string {
+	return scanChannels(name, serviceClientPrefix)
+}
+
+// scanChannels lists the ids of the channels that exist under name and a client prefix.
+func scanChannels(name, clientPrefix string) []string {
 	entries, err := os.ReadDir(runtimeDir())
 	if err != nil {
 		return nil
 	}
-	prefix := "go-ipc-" + name + serviceClientPrefix
+	prefix := "go-ipc-" + name + clientPrefix
 	suffix := chanOpenerToCreator + ".name"
 	var ids []string
 	for _, entry := range entries {
@@ -366,28 +368,47 @@ func Connect(ctx context.Context, name string, opts ...Option) (*Client, error) 
 // the caller holds it open already; the knock then goes out on it, and
 // connect closes it.
 func connect(ctx context.Context, name string, opts []Option, reg *Queue) (*Client, error) {
+	ch, ordinal, err := handshake(ctx, name, serviceRegistrySuffix, serviceClientPrefix, serviceOptions(opts), reg)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{name: name, ordinal: ordinal, ch: ch, seq: serviceFirstSeq - 1}, nil
+}
+
+// handshake is the client half of a connection. It creates a channel of its
+// own under name and clientPrefix, knocks on the queue name and
+// registrySuffix give, and waits for the hello. It returns the channel and
+// the ordinal the server gave it. reg is that queue when the caller holds it
+// open; handshake closes it.
+func handshake(ctx context.Context, name, registrySuffix, clientPrefix string, opts []Option, reg *Queue) (*Channel, int, error) {
 	id, err := newIncarnation()
 	if err != nil {
 		closeQueue(reg)
-		return nil, err
+		return nil, 0, err
 	}
-	ch, err := CreateChannel(name+serviceClientPrefix+id, serviceOptions(opts)...)
+	ch, err := CreateChannel(name+clientPrefix+id, opts...)
 	if err != nil {
 		closeQueue(reg)
-		return nil, fmt.Errorf("ipc: connect %q: %w", name, err)
+		return nil, 0, fmt.Errorf("ipc: connect %q: %w", name, err)
 	}
-	knock(ctx, name, id, reg)
+	knock(ctx, name+registrySuffix, id, reg)
 	typ, msg, err := ch.Recv(ctx)
 	if err == nil && (typ != typeServiceHello || len(msg) != serviceSeqSize) {
-		err = fmt.Errorf("%w: the service sent type %d before hello", ErrCorrupt, typ)
+		err = fmt.Errorf("%w: the server sent type %d before hello", ErrCorrupt, typ)
 	}
 	if err != nil {
 		ch.Close()
 		ch.Unlink()
-		return nil, fmt.Errorf("ipc: connect %q: %w", name, err)
+		return nil, 0, fmt.Errorf("ipc: connect %q: %w", name, err)
 	}
-	ordinal := int(binary.LittleEndian.Uint64(msg))
-	return &Client{name: name, ordinal: ordinal, ch: ch, seq: serviceFirstSeq - 1}, nil
+	return ch, int(binary.LittleEndian.Uint64(msg)), nil
+}
+
+// sendHello gives a client its ordinal, which is the first record on its channel.
+func sendHello(ctx context.Context, ch *Channel, ordinal int) error {
+	var hello [serviceSeqSize]byte
+	binary.LittleEndian.PutUint64(hello[:], uint64(ordinal))
+	return ch.SendTyped(ctx, typeServiceHello, hello[:])
 }
 
 // TryConnect connects to a service that runs now. Where Connect waits for a
@@ -415,12 +436,10 @@ func serviceOptions(opts []Option) []Option {
 }
 
 // knock tells a running service about a new client. A service that is not up yet finds the client's channel when it starts, so a failure here costs nothing.
-//
-// q is the service's queue when the caller holds it open. knock closes it.
-func knock(ctx context.Context, name, id string, q *Queue) {
+func knock(ctx context.Context, registry, id string, q *Queue) {
 	if q == nil {
 		var err error
-		if q, err = OpenQueue(name + serviceRegistrySuffix); err != nil {
+		if q, err = OpenQueue(registry); err != nil {
 			return
 		}
 	}
