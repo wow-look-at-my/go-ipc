@@ -3,6 +3,7 @@
 package ipc
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -286,6 +287,27 @@ func TestServiceRejectsAnOversizedCall(t *testing.T) {
 	typ, _, err := c.Call(contextWithTimeout(t), testEcho, make([]byte, c.MaxPayloadSize()))
 	require.NoError(t, err)
 	assert.Equal(t, testEchoed, typ)
+}
+
+// TestServiceEchoesRequestsOfEverySize sends a small request, the largest
+// one and a small one again on one connection. The service keeps one buffer
+// per client, which grows with the requests.
+func TestServiceEchoesRequestsOfEverySize(t *testing.T) {
+	name := uniqueName(t)
+	serveTest(t, name)
+	c := connectTest(t, name)
+	ctx := contextWithTimeout(t)
+	for _, size := range []int{3, c.MaxPayloadSize(), 0, 100, c.MaxPayloadSize() / 2, 7} {
+		req := make([]byte, size)
+		for i := range req {
+			req[i] = byte(i + size)
+		}
+		typ, reply, err := c.Call(ctx, testEcho, req)
+		require.NoError(t, err)
+		assert.Equal(t, testEchoed, typ)
+		assert.Equal(t, len(req), len(reply), "size %d", size)
+		assert.True(t, bytes.Equal(req, reply), "a request of %d bytes came back changed", size)
+	}
 }
 
 // A prompt's token array travels in one call, so a default service channel has to hold a whole context.
