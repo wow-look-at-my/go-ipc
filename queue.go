@@ -620,7 +620,7 @@ func (q *Queue) Close() error {
 // already open stay usable until they close.
 func (q *Queue) Unlink() error {
 	err := removeInstance(q.name, q.inc)
-	if uerr := unlinkName(q.name, q.inc); err == nil {
+	if uerr := unlinkName(q.name, q.inc, q.lock); err == nil {
 		err = uerr
 	}
 	if q.lock != nil {

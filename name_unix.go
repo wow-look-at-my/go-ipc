@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/wow-look-at-my/go-ipc/filelock"
 	"golang.org/x/sys/unix"
@@ -43,7 +44,12 @@ func incPath(name string) string {
 type nameLock struct {
 	name string
 	f    *os.File
+	// released is set once release let the lock go.
+	released atomic.Bool
 }
+
+// held reports a lock that is taken and not yet released.
+func (l *nameLock) held() bool { return l != nil && !l.released.Load() }
 
 // lockName takes the name, or fails with ErrInUse while a live process
 // holds it.
@@ -90,7 +96,10 @@ func (l *nameLock) publish(inc string) error {
 	return f.Truncate(int64(len(inc)))
 }
 
-func (l *nameLock) release() error { return l.f.Close() }
+func (l *nameLock) release() error {
+	l.released.Store(true)
+	return l.f.Close()
+}
 
 // unlink has nothing to do. unlinkName removes the name file by its path.
 func (l *nameLock) unlink() error { return nil }
@@ -113,7 +122,25 @@ func readName(name string) (string, error) {
 
 // unlinkName removes the name file while it still points at inc. A newer
 // instance under the same name keeps its file.
-func unlinkName(name, inc string) error {
+//
+// own is the caller's lock on the name. A caller that no longer holds it
+// takes the name first. A successor can hold the name and not have
+// published its instance yet. The file still points at inc then, and
+// removing it takes the name from under the successor.
+func unlinkName(name, inc string, own *nameLock) error {
+	if !own.held() {
+		if _, err := os.Stat(namePath(name)); errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		lock, err := lockName(name)
+		if errors.Is(err, ErrInUse) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer lock.release()
+	}
 	content, err := os.ReadFile(incPath(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

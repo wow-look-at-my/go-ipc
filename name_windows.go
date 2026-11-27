@@ -131,7 +131,7 @@ func readName(name string) (string, error) {
 }
 
 // unlinkName has nothing to do. Only the holder can remove the name file, and it does so through nameLock.unlink.
-func unlinkName(string, string) error { return nil }
+func unlinkName(string, string, *nameLock) error { return nil }
 
 var sweepOnce sync.Once
 

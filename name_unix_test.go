@@ -13,6 +13,50 @@ import (
 	"github.com/wow-look-at-my/go-shm"
 )
 
+// TestUnlinkLeavesTheNameASuccessorHolds closes a queue, lets a successor
+// take the name, and unlinks the closed queue before the successor has
+// published its instance. The name file must stay the one the successor
+// locked.
+func TestUnlinkLeavesTheNameASuccessorHolds(t *testing.T) {
+	name := uniqueName(t)
+	q, err := CreateQueue(name, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, q.Close())
+
+	successor, err := lockName(name)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		successor.release()
+		removeName(name)
+	})
+	locked, err := successor.f.Stat()
+	require.NoError(t, err)
+
+	require.NoError(t, q.Unlink())
+	now, err := os.Stat(namePath(name))
+	require.NoError(t, err, "the unlink removed the name file its successor holds")
+	assert.True(t, os.SameFile(locked, now))
+}
+
+// TestUnlinkRemovesTheNameNobodyHolds is the same sequence with no successor.
+func TestUnlinkRemovesTheNameNobodyHolds(t *testing.T) {
+	name := uniqueName(t)
+	q, err := CreateQueue(name, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, q.Close())
+	require.NoError(t, q.Unlink())
+	_, err = os.Stat(namePath(name))
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+	require.NoError(t, q.Unlink(), "a second unlink finds nothing to do")
+
+	held, err := CreateQueue(name, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, held.Unlink(), "a holder unlinks under its own lock")
+	_, err = os.Stat(namePath(name))
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+	require.NoError(t, held.Close())
+}
+
 func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)
