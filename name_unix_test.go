@@ -81,6 +81,68 @@ func TestSweepMakesNoNameFile(t *testing.T) {
 	require.NoError(t, removeName(name))
 }
 
+// abandonBuild leaves what a creator leaves when it dies between making its
+// instance and publishing it: events and a segment. That abandonBuild is
+// under an id that no file names.
+func abandonBuild(t *testing.T, name string) {
+	t.Helper()
+	inc, err := newIncarnation()
+	require.NoError(t, err)
+	inst := instanceName(name, inc)
+	for _, suffix := range []string{".ne", ".nf"} {
+		e, err := CreateEvent(inst + suffix)
+		require.NoError(t, err)
+		require.NoError(t, e.Close())
+	}
+	seg, err := shm.Create(inst, RingSize(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, seg.Close())
+	t.Cleanup(func() { removeInstance(name, inc) })
+}
+
+func TestSweepRemovesAnInstanceItsCreatorNeverPublished(t *testing.T) {
+	name := uniqueName(t)
+	lock, err := lockName(name)
+	require.NoError(t, err)
+	t.Cleanup(func() { removeName(name) })
+	abandonBuild(t, name)
+	before := filesOf(t, name)
+	require.Len(t, before, 4, "the name file, two events and the segment")
+
+	sweepDir(runtimeDir())
+	assert.Equal(t, before, filesOf(t, name), "the sweep took the instance of a live creator")
+
+	require.NoError(t, lock.release())
+	sweepDir(runtimeDir())
+	assert.Empty(t, filesOf(t, name))
+}
+
+func TestSweepRemovesAnInstanceWithNoNameFile(t *testing.T) {
+	name := uniqueName(t)
+	abandonBuild(t, name)
+	require.Len(t, filesOf(t, name), 3, "two events and the segment")
+
+	sweepDir(runtimeDir())
+	assert.Empty(t, filesOf(t, name))
+	_, err := os.Stat(namePath(name))
+	assert.ErrorIs(t, err, fs.ErrNotExist, "the sweep made a name file")
+}
+
+// TestSweepLeavesAnEventOfThatShape makes one event under a name that reads
+// as half of an instance. A caller may name an event so.
+func TestSweepLeavesAnEventOfThatShape(t *testing.T) {
+	name := uniqueName(t) + ".0123456789abcdef.ne"
+	e, err := CreateEvent(name)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		e.Close()
+		e.Unlink()
+	})
+	sweepDir(runtimeDir())
+	_, err = os.Stat(eventPath(name))
+	require.NoError(t, err, "the sweep removed an event that is no instance")
+}
+
 func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)

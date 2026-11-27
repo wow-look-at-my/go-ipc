@@ -31,6 +31,8 @@ A process killed before `Unlink` leaves its instance behind. On Linux that is me
 
 The sweep takes each lock for a moment. A creator that races it on a stale name can get `ErrInUse`, and succeeds when it tries again. The sweep takes a lock only on a name file that exists, and never makes one. A name that its owner removed therefore does not come back for a moment under a sweep that listed it earlier.
 
+A creator makes its instance before it publishes the id, so a creator that dies in between leaves. An instance that no name file points at. The Go sweep finds such an instance by its events. It removes it under the lock of the name, or with no lock when the name file is gone too. The C and C++ sweeps do not do this yet.
+
 ## Ring layout
 
 The control block is a run of cache lines, then the table of claim slots. `HeaderSize` is its size. Each cursor that a different party writes gets a line of its own.

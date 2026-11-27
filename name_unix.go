@@ -173,6 +173,8 @@ func sweepDir(dir string) {
 	if err != nil {
 		return
 	}
+	var names []string
+	built := builtInstances{}
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), "go-ipc-life-") && strings.HasSuffix(entry.Name(), ".sock") {
 			sweepLife(filepath.Join(dir, entry.Name()))
@@ -182,6 +184,9 @@ func sweepDir(dir string) {
 		if !ok {
 			continue
 		}
+		if built.note(name) {
+			continue
+		}
 		base, ok := strings.CutSuffix(name, nameSuffix)
 		if !ok {
 			base, ok = strings.CutSuffix(name, ".inc")
@@ -189,23 +194,90 @@ func sweepDir(dir string) {
 		if name = base; !ok || validateName(name) != nil {
 			continue
 		}
-		sweepName(name)
+		names = append(names, name)
+	}
+	for _, name := range names {
+		sweepName(name, built.of(name)...)
+		// A name with a file is settled here, whether the lock was free.
+		delete(built, name)
+	}
+	for name := range built {
+		sweepUnnamed(name, built.of(name))
 	}
 }
 
-// sweepName removes a name that no live process holds. The cleanup is on
-// behalf of processes that are gone. A failure costs this caller nothing, and
-// the next sweep tries again.
-func sweepName(name string) {
+// builtInstances maps a name to the instances whose events are in the directory.
+type builtInstances map[string]map[string]int
+
+const (
+	sawNotEmpty = 1 << iota
+	sawNotFull
+)
+
+// note records entry when it is the event of an instance. entry is a file
+// name without the prefix that every file of this package has.
+func (b builtInstances) note(entry string) bool {
+	saw := sawNotEmpty
+	base, ok := strings.CutSuffix(entry, ".ne.event")
+	if !ok {
+		saw = sawNotFull
+		base, ok = strings.CutSuffix(entry, ".nf.event")
+	}
+	cut := len(base) - incarnationLen
+	if !ok || cut < 2 || base[cut-1] != '.' {
+		return false
+	}
+	inc, ok := parseIncarnation([]byte(base[cut:]))
+	name := base[:cut-1]
+	if !ok || validateName(name) != nil {
+		return false
+	}
+	if b[name] == nil {
+		b[name] = map[string]int{}
+	}
+	b[name][inc] |= saw
+	return true
+}
+
+// of returns the instances of name that have both events. One event alone
+// can be an event a caller made under a name of that shape.
+func (b builtInstances) of(name string) []string {
+	var incs []string
+	for inc, saw := range b[name] {
+		if saw == sawNotEmpty|sawNotFull {
+			incs = append(incs, inc)
+		}
+	}
+	return incs
+}
+
+// sweepName removes a name that no live process holds, with the instance it
+// points at and every instance in built. The cleanup is on behalf of
+// processes that are gone. A failure costs this caller nothing, and the next
+// sweep tries again.
+func sweepName(name string, built ...string) {
 	lock, err := lockExistingName(name)
 	if err != nil {
 		return
 	}
 	defer lock.release()
 	if inc := lock.previous(); inc != "" {
+		built = append(built, inc)
+	}
+	for _, inc := range built {
 		if removeInstance(name, inc) != nil {
 			return
 		}
 	}
 	removeName(name)
+}
+
+// sweepUnnamed removes instances whose name has no file.
+func sweepUnnamed(name string, incs []string) {
+	if _, err := os.Stat(namePath(name)); !nameGone(err) {
+		return
+	}
+	for _, inc := range incs {
+		removeInstance(name, inc)
+	}
 }
