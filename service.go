@@ -234,7 +234,8 @@ func (s *Service) forget(sess *Session) {
 func (s *Service) serve(sess *Session) {
 	defer s.forget(sess)
 	ch := sess.ch
-	buf := make([]byte, ch.MaxMessageSize())
+	// The buffer grows to the largest request this client sent.
+	var buf []byte
 	for {
 		typ, msg, err := ch.RecvInto(s.ctx, buf)
 		if errors.Is(err, ErrPeerGone) {
@@ -249,6 +250,7 @@ func (s *Service) serve(sess *Session) {
 		if err := s.answer(sess, typ, msg); err != nil {
 			return
 		}
+		buf = msg[:0]
 	}
 }
 

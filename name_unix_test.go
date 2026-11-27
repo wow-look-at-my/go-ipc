@@ -81,6 +81,92 @@ func TestSweepMakesNoNameFile(t *testing.T) {
 	require.NoError(t, removeName(name))
 }
 
+// abandonBuild leaves what a creator leaves when it dies between making its
+// instance and publishing it: events and a segment. That abandonBuild is
+// under an id that no file names.
+func abandonBuild(t *testing.T, name string) {
+	t.Helper()
+	inc, err := newIncarnation()
+	require.NoError(t, err)
+	inst := instanceName(name, inc)
+	for _, suffix := range []string{".ne", ".nf"} {
+		e, err := CreateEvent(inst + suffix)
+		require.NoError(t, err)
+		require.NoError(t, e.Close())
+	}
+	seg, err := shm.Create(inst, RingSize(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, seg.Close())
+	t.Cleanup(func() { removeInstance(name, inc) })
+}
+
+func TestSweepRemovesAnInstanceItsCreatorNeverPublished(t *testing.T) {
+	name := uniqueName(t)
+	lock, err := lockName(name)
+	require.NoError(t, err)
+	t.Cleanup(func() { removeName(name) })
+	abandonBuild(t, name)
+	// A host whose events are sockets shows the name file and the segment. Another host shows both events too.
+	before := filesOf(t, name)
+	require.GreaterOrEqual(t, len(before), 2, "the name file and the segment")
+
+	sweepDir(runtimeDir())
+	assert.Equal(t, before, filesOf(t, name), "the sweep took the instance of a live creator")
+
+	require.NoError(t, lock.release())
+	sweepDir(runtimeDir())
+	assert.Empty(t, filesOf(t, name))
+}
+
+// TestSweepFindsAnUnpublishedInstanceByItsSegment runs the events on sockets,
+// as a Windows host does. The sweep then has only the segment to go by.
+func TestSweepFindsAnUnpublishedInstanceByItsSegment(t *testing.T) {
+	useSockEvents(t)
+	name := uniqueName(t)
+	lock, err := lockName(name)
+	require.NoError(t, err)
+	t.Cleanup(func() { removeName(name) })
+	abandonBuild(t, name)
+	require.NoError(t, lock.release())
+	require.Len(t, filesOf(t, name), 2, "the name file and the segment")
+
+	sweepDir(runtimeDir())
+	assert.Empty(t, filesOf(t, name))
+}
+
+func TestSweepRemovesAnInstanceWithNoNameFile(t *testing.T) {
+	name := uniqueName(t)
+	abandonBuild(t, name)
+	before := filesOf(t, name)
+	require.NotEmpty(t, before)
+
+	sweepDir(runtimeDir())
+	_, err := os.Stat(namePath(name))
+	assert.ErrorIs(t, err, fs.ErrNotExist, "the sweep made a name file")
+	if sockHost() {
+		// A socket event has a name that the sweep cannot read, and a segment alone can belong to another user of go-shm.
+		assert.Equal(t, before, filesOf(t, name), "the sweep judged an instance by its segment alone")
+		return
+	}
+	assert.Empty(t, filesOf(t, name))
+}
+
+// TestSweepLeavesAnEventOfThatShape makes one event under a name that reads
+// as half of an instance. A caller may name an event so.
+func TestSweepLeavesAnEventOfThatShape(t *testing.T) {
+	name := uniqueName(t) + ".0123456789abcdef.ne"
+	e, err := CreateEvent(name)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		e.Close()
+		e.Unlink()
+	})
+	sweepDir(runtimeDir())
+	opened, err := OpenEvent(name)
+	require.NoError(t, err, "the sweep removed an event that is no instance")
+	require.NoError(t, opened.Close())
+}
+
 func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)
