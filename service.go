@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -377,6 +378,24 @@ func Connect(ctx context.Context, name string, opts ...Option) (*Client, error) 
 	}
 	ordinal := int(binary.LittleEndian.Uint64(msg))
 	return &Client{name: name, ordinal: ordinal, ch: ch, seq: serviceFirstSeq - 1}, nil
+}
+
+// TryConnect connects to a service that runs now. Where Connect waits for a
+// service to start, TryConnect returns ErrNoService at once when no live
+// process serves the name. A service that still starts is waited for.
+func TryConnect(ctx context.Context, name string, opts ...Option) (*Client, error) {
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+	q, err := OpenQueue(name + serviceRegistrySuffix)
+	switch {
+	case err == nil:
+		q.Close()
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, ErrPeerGone):
+		return nil, fmt.Errorf("ipc: connect %q: %w", name, ErrNoService)
+	}
+	// Any other failure leaves the answer to Connect, within ctx.
+	return Connect(ctx, name, opts...)
 }
 
 // serviceOptions puts the service capacity first, so a caller that names its own capacity still wins.

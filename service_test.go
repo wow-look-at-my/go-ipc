@@ -327,6 +327,52 @@ func TestServiceConnectGivesUpWithItsContext(t *testing.T) {
 	assert.Empty(t, scanClients(name), "a client that gives up must unlink its channel")
 }
 
+func TestTryConnectReportsNoServiceAtOnce(t *testing.T) {
+	name := uniqueName(t)
+	// The context has no deadline: a TryConnect that waits would hang the test.
+	_, err := TryConnect(context.Background(), name, WithCapacity(MinCapacity))
+	assert.ErrorIs(t, err, ErrNoService)
+	assert.Empty(t, scanClients(name), "a refused connect must leave no channel")
+}
+
+func TestTryConnectReachesARunningService(t *testing.T) {
+	name := uniqueName(t)
+	serveTest(t, name)
+	ctx := contextWithTimeout(t)
+	c, err := TryConnect(ctx, name, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	defer c.Close()
+	typ, reply, err := c.Call(ctx, testEcho, []byte("now"))
+	require.NoError(t, err)
+	assert.Equal(t, testEchoed, typ)
+	assert.Equal(t, "now", string(reply))
+}
+
+func TestTryConnectReportsAServiceThatClosed(t *testing.T) {
+	name := uniqueName(t)
+	svc, _ := serveTest(t, name)
+	require.NoError(t, svc.Close())
+	_, err := TryConnect(context.Background(), name, WithCapacity(MinCapacity))
+	assert.ErrorIs(t, err, ErrNoService)
+}
+
+// TestTryConnectReportsAServiceThatWentWithoutUnlink leaves the queue name in
+// place, as a server that exits does.
+func TestTryConnectReportsAServiceThatWentWithoutUnlink(t *testing.T) {
+	name := uniqueName(t)
+	q, err := CreateQueue(name+serviceRegistrySuffix, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	t.Cleanup(func() { q.Unlink() })
+	require.NoError(t, q.Close())
+	_, err = TryConnect(context.Background(), name, WithCapacity(MinCapacity))
+	assert.ErrorIs(t, err, ErrNoService)
+}
+
+func TestTryConnectRejectsABadName(t *testing.T) {
+	_, err := TryConnect(contextWithTimeout(t), "no/slashes")
+	assert.ErrorIs(t, err, ErrInvalidName)
+}
+
 // counterMessage is a hand-written Message, as ipcgen would generate one.
 type counterMessage struct {
 	N uint64
