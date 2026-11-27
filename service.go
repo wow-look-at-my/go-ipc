@@ -353,22 +353,30 @@ type Client struct {
 	seq     uint64
 }
 
-// Connect connects to the named service. A service that does not exist yet
-// is waited for, parked in the kernel, until ctx ends. A service that exited
-// reports ErrPeerGone from the first call that finds it gone.
+// Connect connects to the named service. A service that does not exist yet is
+// waited for, parked in the kernel, until ctx ends.
 func Connect(ctx context.Context, name string, opts ...Option) (*Client, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
+	return connect(ctx, name, opts, nil)
+}
+
+// connect is Connect after the name check. reg is the service's queue when
+// the caller holds it open already; the knock then goes out on it, and
+// connect closes it.
+func connect(ctx context.Context, name string, opts []Option, reg *Queue) (*Client, error) {
 	id, err := newIncarnation()
 	if err != nil {
+		closeQueue(reg)
 		return nil, err
 	}
 	ch, err := CreateChannel(name+serviceClientPrefix+id, serviceOptions(opts)...)
 	if err != nil {
+		closeQueue(reg)
 		return nil, fmt.Errorf("ipc: connect %q: %w", name, err)
 	}
-	knock(ctx, name, id)
+	knock(ctx, name, id, reg)
 	typ, msg, err := ch.Recv(ctx)
 	if err == nil && (typ != typeServiceHello || len(msg) != serviceSeqSize) {
 		err = fmt.Errorf("%w: the service sent type %d before hello", ErrCorrupt, typ)
@@ -390,14 +398,15 @@ func TryConnect(ctx context.Context, name string, opts ...Option) (*Client, erro
 		return nil, err
 	}
 	q, err := OpenQueue(name + serviceRegistrySuffix)
-	switch {
-	case err == nil:
-		q.Close()
-	case errors.Is(err, fs.ErrNotExist), errors.Is(err, ErrPeerGone):
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, ErrPeerGone) {
 		return nil, fmt.Errorf("ipc: connect %q: %w", name, ErrNoService)
 	}
-	// Any other failure leaves the answer to Connect, within ctx.
-	return Connect(ctx, name, opts...)
+	if err != nil {
+		// Any other failure leaves the answer to the connect, within ctx.
+		q = nil
+	}
+	// The knock goes out on the queue this check opened.
+	return connect(ctx, name, opts, q)
 }
 
 // serviceOptions puts the service capacity first, so a caller that names its own capacity still wins.
@@ -405,16 +414,25 @@ func serviceOptions(opts []Option) []Option {
 	return append([]Option{WithCapacity(serviceCapacity)}, opts...)
 }
 
-// knock tells a running service about a new client. A service that is not
-// up yet finds the client's channel when it starts, so a failure here costs
-// nothing.
-func knock(ctx context.Context, name, id string) {
-	q, err := OpenQueue(name + serviceRegistrySuffix)
-	if err != nil {
-		return
+// knock tells a running service about a new client. A service that is not up yet finds the client's channel when it starts, so a failure here costs nothing.
+//
+// q is the service's queue when the caller holds it open. knock closes it.
+func knock(ctx context.Context, name, id string, q *Queue) {
+	if q == nil {
+		var err error
+		if q, err = OpenQueue(name + serviceRegistrySuffix); err != nil {
+			return
+		}
 	}
 	defer q.Close()
 	q.SendTyped(ctx, typeServiceKnock, []byte(id))
+}
+
+// closeQueue closes q when there is one.
+func closeQueue(q *Queue) {
+	if q != nil {
+		q.Close()
+	}
 }
 
 // Name returns the service name.
