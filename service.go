@@ -171,18 +171,22 @@ func (s *Service) Name() string { return s.name }
 // run adopts each client that knocks until the queue closes.
 func (s *Service) run() {
 	defer close(s.knocks)
+	s.stop(readKnocks(s.ctx, s.reg, s.adopt))
+}
+
+// readKnocks hands adopt the id of each client that knocks on reg. It returns the error that ended the queue.
+func readKnocks(ctx context.Context, reg *Queue, adopt func(id string)) error {
 	buf := make([]byte, serviceClientIDs)
 	for {
-		typ, payload, err := s.reg.RecvInto(s.ctx, buf)
+		typ, payload, err := reg.RecvInto(ctx, buf)
 		if err != nil {
-			s.stop(err)
-			return
+			return err
 		}
 		if typ != typeServiceKnock {
 			continue
 		}
 		if id, ok := parseIncarnation(payload); ok {
-			s.adopt(id)
+			adopt(id)
 		}
 	}
 }

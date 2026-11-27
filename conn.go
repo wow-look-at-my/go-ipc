@@ -47,7 +47,24 @@ type Conn struct {
 	base       context.Context
 	cancelBase context.CancelFunc
 	closeOnce  sync.Once
+
+	// reap says when Close removes the endpoint's names.
+	reap reapMode
+	// gone is set once a Read or a Write found the peer dead.
+	gone atomic.Bool
 }
+
+// A reapMode says when Close removes the names of a connection.
+type reapMode int
+
+const (
+	// reapNever leaves the names to Unlink.
+	reapNever reapMode = iota
+	// reapAlways is the side that created the names.
+	reapAlways
+	// reapPeerGone is the other side. It removes the names of a creator that died.
+	reapPeerGone
+)
 
 var _ net.Conn = (*Conn)(nil)
 
@@ -95,6 +112,9 @@ func (c *Conn) Channel() *Channel { return c.ch }
 
 // translate maps a context error onto the error a net.Conn caller expects.
 func (c *Conn) translate(ctx context.Context, err error) error {
+	if errors.Is(err, ErrPeerGone) {
+		c.gone.Store(true)
+	}
 	switch {
 	case errors.Is(context.Cause(ctx), os.ErrDeadlineExceeded):
 		return os.ErrDeadlineExceeded
@@ -200,6 +220,11 @@ func (c *Conn) Close() error {
 		}
 		c.cancelBase()
 		err = c.ch.Close()
+		if c.reap == reapAlways || (c.reap == reapPeerGone && c.gone.Load()) {
+			if uerr := c.ch.Unlink(); err == nil {
+				err = uerr
+			}
+		}
 	})
 	return err
 }

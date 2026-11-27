@@ -64,6 +64,8 @@ func runChild(role, name, count string) error {
 		return childPeer(ctx, name)
 	case "service-client":
 		return childServiceClient(ctx, name)
+	case "stream-dialer":
+		return childStreamDialer(ctx, name)
 	case "release":
 		return childRelease()
 	case "write-and-die":

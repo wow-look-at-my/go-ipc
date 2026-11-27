@@ -66,6 +66,15 @@ enc := gob.NewEncoder(conn)
 dec := gob.NewDecoder(conn)
 ```
 
+`ListenStream` is the form for many dialers. It returns a `net.Listener`, and each `DialStream` gets a stream of its own. A dial that comes before the listener parks until it starts. Only Go has it so far.
+
+```go
+l, err := ipc.ListenStream("rpc")           // one process
+conn, err := l.Accept()
+
+conn, err := ipc.DialStream(ctx, "rpc")     // any number of others
+```
+
 ## Services
 
 `Serve` answers calls from any number of client processes. Each client gets its own channel. A client that exits is reported to the handler, and a client whose service exits gets `ErrPeerGone`. A client that connects before the service exists parks until it starts.
