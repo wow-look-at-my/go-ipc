@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// service.go holds serviceRegistrySuffix.
+
 package ipc
 
 import (
