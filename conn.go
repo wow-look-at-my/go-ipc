@@ -54,14 +54,12 @@ type Conn struct {
 	gone atomic.Bool
 }
 
-// A reapMode says when Close removes the names of a connection.
+// A reapMode says when Close removes the names of a connection. The zero value leaves them to Unlink.
 type reapMode int
 
 const (
-	// reapNever leaves the names to Unlink.
-	reapNever reapMode = iota
 	// reapAlways is the side that created the names.
-	reapAlways
+	reapAlways reapMode = iota + 1
 	// reapPeerGone is the other side. It removes the names of a creator that died.
 	reapPeerGone
 )
