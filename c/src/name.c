@@ -105,14 +105,16 @@ static void unhold(int fd)
 
 /* ---- the name lock ---- */
 
-int goipc__lock_name(const char *name, int *out)
+/* lock_name takes the flock on the name file. With the first create it
+ * fails with ENOENT when the file is gone, and never makes one. */
+static int lock_name(const char *name, int *out, int create)
 {
 	char *path = goipc__name_path(name);
 	if (path == NULL)
 		return GOIPC_ENOMEM;
 	int rc;
 	for (;;) {
-		int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+		int fd = open(path, O_RDWR | create | O_CLOEXEC, 0600);
 		if (fd < 0) {
 			rc = goipc__sys();
 			break;
@@ -141,6 +143,16 @@ int goipc__lock_name(const char *name, int *out)
 	}
 	free(path);
 	return rc;
+}
+
+int goipc__lock_name(const char *name, int *out)
+{
+	return lock_name(name, out, O_CREAT);
+}
+
+int goipc__lock_existing_name(const char *name, int *out)
+{
+	return lock_name(name, out, 0);
 }
 
 void goipc__release_name(int fd)
@@ -344,7 +356,8 @@ static void sweep_life(const char *path)
 static void sweep_name(const char *name)
 {
 	int fd;
-	if (goipc__lock_name(name, &fd) != GOIPC_OK)
+	/* A lock that made the file would show a name its owner just removed. */
+	if (goipc__lock_existing_name(name, &fd) != GOIPC_OK)
 		return;
 	char inc[GOIPC_INC_LEN + 1];
 	goipc__previous_inc(name, inc);

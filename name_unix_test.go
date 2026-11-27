@@ -57,6 +57,30 @@ func TestUnlinkRemovesTheNameNobodyHolds(t *testing.T) {
 	require.NoError(t, held.Close())
 }
 
+// TestSweepMakesNoNameFile sweeps a name whose owner removed it. A sweep that
+// made the file, even for a moment, would show a name nobody holds.
+func TestSweepMakesNoNameFile(t *testing.T) {
+	name := uniqueName(t)
+	_, err := lockExistingName(name)
+	require.ErrorIs(t, err, fs.ErrNotExist)
+	_, err = os.Stat(namePath(name))
+	require.ErrorIs(t, err, fs.ErrNotExist, "the lock made the file of a name nobody holds")
+
+	sweepName(name)
+	_, err = os.Stat(namePath(name))
+	require.ErrorIs(t, err, fs.ErrNotExist)
+
+	held, err := lockName(name)
+	require.NoError(t, err)
+	_, err = lockExistingName(name)
+	require.ErrorIs(t, err, ErrInUse)
+	require.NoError(t, held.release())
+	free, err := lockExistingName(name)
+	require.NoError(t, err, "a name file with no holder is taken")
+	require.NoError(t, free.release())
+	require.NoError(t, removeName(name))
+}
+
 func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)

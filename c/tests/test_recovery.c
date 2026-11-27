@@ -626,6 +626,27 @@ TEST(sweep_removes_name_of_dead_creator, T_FORK)
 	free(inst);
 }
 
+/* A sweep that made the name file, even for a moment, would show a name its
+ * owner removed. */
+TEST(sweep_makes_no_name_file, 0)
+{
+	char name[96];
+	unique_name(name, sizeof name, "nofile");
+	char *path = goipc__name_path(name);
+	int fd = -1;
+	CHECK(goipc__lock_existing_name(name, &fd) != GOIPC_OK, "a name with no file was locked");
+	CHECK(!path_exists(path), "the lock made %s", path);
+
+	REQUIRE_RC(goipc__lock_name(name, &fd), GOIPC_OK);
+	int second = -1;
+	CHECK_RC(goipc__lock_existing_name(name, &second), GOIPC_EINUSE);
+	goipc__release_name(fd);
+	REQUIRE_RC(goipc__lock_existing_name(name, &fd), GOIPC_OK);
+	goipc__release_name(fd);
+	unlink(path);
+	free(path);
+}
+
 TEST(fork_child_has_its_own_identity, T_FORK)
 {
 	uint64_t self = goipc__self_id();
