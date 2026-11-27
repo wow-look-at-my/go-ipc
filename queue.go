@@ -161,7 +161,8 @@ func (q *Queue) build(reader procID) error {
 	if q.seg, err = shm.Create(inst, RingSize(q.cfg.capacity)); err != nil {
 		return err
 	}
-	if q.ring, err = initRing(q.seg.Data(), reader); err != nil {
+	// shm.Create hands back a new segment, which holds only zeros.
+	if q.ring, err = initRing(q.seg.Data(), reader, true); err != nil {
 		return err
 	}
 	return q.lock.publish(q.inc)

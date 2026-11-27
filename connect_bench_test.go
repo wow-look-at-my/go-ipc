@@ -77,6 +77,18 @@ func BenchmarkServiceConnect(b *testing.B) {
 	}
 }
 
+// BenchmarkServiceConnectDefaultCapacity is BenchmarkServiceConnect with the capacity a client gets when it names none.
+func BenchmarkServiceConnectDefaultCapacity(b *testing.B) {
+	name := benchService(b)
+	ctx := context.Background()
+	b.ReportAllocs()
+	for b.Loop() {
+		c, err := Connect(ctx, name)
+		require.NoError(b, err)
+		c.Close()
+	}
+}
+
 // BenchmarkServiceTryConnect is BenchmarkServiceConnect through TryConnect.
 func BenchmarkServiceTryConnect(b *testing.B) {
 	name := benchService(b)

@@ -102,12 +102,16 @@ func RingSize(capacity int) int {
 
 // InitRing formats buf as an empty ring and returns a handle to it.
 func InitRing(buf []byte) (*Ring, error) {
-	return initRing(buf, noProc)
+	return initRing(buf, noProc, false)
 }
 
 // initRing is InitRing with the consumer recorded before the ring becomes
 // visible, so a peer that attaches never sees a ring without its reader.
-func initRing(buf []byte, consumer procID) (*Ring, error) {
+//
+// zeroed says that buf holds only zeros already, as a new segment does. The
+// data region is then left alone, so the kernel gives it no page until a
+// record lands there.
+func initRing(buf []byte, consumer procID, zeroed bool) (*Ring, error) {
 	if len(buf) < HeaderSize+MinCapacity {
 		return nil, ErrTooSmall
 	}
@@ -116,7 +120,11 @@ func initRing(buf []byte, consumer procID) (*Ring, error) {
 	}
 	capacity := uint64(1) << (bits.Len64(uint64(len(buf)-HeaderSize)) - 1)
 
-	clear(buf)
+	if zeroed {
+		clear(buf[:HeaderSize])
+	} else {
+		clear(buf)
+	}
 	hdr := (*ringHeader)(unsafe.Pointer(&buf[0]))
 	hdr.capacity = capacity
 	hdr.version = ringVersion
