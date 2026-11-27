@@ -13,6 +13,74 @@ import (
 	"github.com/wow-look-at-my/go-shm"
 )
 
+// TestUnlinkLeavesTheNameASuccessorHolds closes a queue, lets a successor
+// take the name, and unlinks the closed queue before the successor has
+// published its instance. The name file must stay the one the successor
+// locked.
+func TestUnlinkLeavesTheNameASuccessorHolds(t *testing.T) {
+	name := uniqueName(t)
+	q, err := CreateQueue(name, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, q.Close())
+
+	successor, err := lockName(name)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		successor.release()
+		removeName(name)
+	})
+	locked, err := successor.f.Stat()
+	require.NoError(t, err)
+
+	require.NoError(t, q.Unlink())
+	now, err := os.Stat(namePath(name))
+	require.NoError(t, err, "the unlink removed the name file its successor holds")
+	assert.True(t, os.SameFile(locked, now))
+}
+
+// TestUnlinkRemovesTheNameNobodyHolds is the same sequence with no successor.
+func TestUnlinkRemovesTheNameNobodyHolds(t *testing.T) {
+	name := uniqueName(t)
+	q, err := CreateQueue(name, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, q.Close())
+	require.NoError(t, q.Unlink())
+	_, err = os.Stat(namePath(name))
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+	require.NoError(t, q.Unlink(), "a second unlink finds nothing to do")
+
+	held, err := CreateQueue(name, WithCapacity(MinCapacity))
+	require.NoError(t, err)
+	require.NoError(t, held.Unlink(), "a holder unlinks under its own lock")
+	_, err = os.Stat(namePath(name))
+	assert.ErrorIs(t, err, fs.ErrNotExist)
+	require.NoError(t, held.Close())
+}
+
+// TestSweepMakesNoNameFile sweeps a name whose owner removed it. A sweep that
+// made the file, even for a moment, would show a name nobody holds.
+func TestSweepMakesNoNameFile(t *testing.T) {
+	name := uniqueName(t)
+	_, err := lockExistingName(name)
+	require.ErrorIs(t, err, fs.ErrNotExist)
+	_, err = os.Stat(namePath(name))
+	require.ErrorIs(t, err, fs.ErrNotExist, "the lock made the file of a name nobody holds")
+
+	sweepName(name)
+	_, err = os.Stat(namePath(name))
+	require.ErrorIs(t, err, fs.ErrNotExist)
+
+	held, err := lockName(name)
+	require.NoError(t, err)
+	_, err = lockExistingName(name)
+	require.ErrorIs(t, err, ErrInUse)
+	require.NoError(t, held.release())
+	free, err := lockExistingName(name)
+	require.NoError(t, err, "a name file with no holder is taken")
+	require.NoError(t, free.release())
+	require.NoError(t, removeName(name))
+}
+
 func TestSweepRemovesNameOfDeadCreator(t *testing.T) {
 	name := uniqueName(t)
 	consumer, _ := startPeer(t, "consumer", name)

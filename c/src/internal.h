@@ -201,6 +201,8 @@ char *goipc__inc_path(const char *name);
 char *goipc__instance_name(const char *name, const char *inc);
 /* goipc__lock_name takes the flock on the name file and returns its fd. */
 int goipc__lock_name(const char *name, int *fd);
+/* goipc__lock_existing_name is goipc__lock_name for a name that has its file. It makes none. */
+int goipc__lock_existing_name(const char *name, int *fd);
 void goipc__release_name(int fd);
 /* */
 void goipc__previous_inc(const char *name, char *inc);

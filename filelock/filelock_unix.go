@@ -1,5 +1,7 @@
 //go:build unix
 
+// filelock_unix.go holds Take.
+
 package filelock
 
 import (

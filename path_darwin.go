@@ -1,3 +1,5 @@
+// path_darwin.go holds runtimeDir.
+
 package ipc
 
 import (

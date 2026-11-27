@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// service.go holds serviceRegistrySuffix.
+
 package ipc
 
 import (
@@ -7,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
@@ -168,18 +171,22 @@ func (s *Service) Name() string { return s.name }
 // run adopts each client that knocks until the queue closes.
 func (s *Service) run() {
 	defer close(s.knocks)
+	s.stop(readKnocks(s.ctx, s.reg, s.adopt))
+}
+
+// readKnocks hands adopt the id of each client that knocks on reg. It returns the error that ended the queue.
+func readKnocks(ctx context.Context, reg *Queue, adopt func(id string)) error {
 	buf := make([]byte, serviceClientIDs)
 	for {
-		typ, payload, err := s.reg.RecvInto(s.ctx, buf)
+		typ, payload, err := reg.RecvInto(ctx, buf)
 		if err != nil {
-			s.stop(err)
-			return
+			return err
 		}
 		if typ != typeServiceKnock {
 			continue
 		}
 		if id, ok := parseIncarnation(payload); ok {
-			s.adopt(id)
+			adopt(id)
 		}
 	}
 }
@@ -207,9 +214,7 @@ func (s *Service) adopt(id string) {
 	s.next++
 	s.sessions[sess] = true
 	s.mu.Unlock()
-	var hello [serviceSeqSize]byte
-	binary.LittleEndian.PutUint64(hello[:], uint64(sess.ordinal))
-	if err := ch.SendTyped(s.ctx, typeServiceHello, hello[:]); err != nil {
+	if err := sendHello(s.ctx, ch, sess.ordinal); err != nil {
 		s.forget(sess)
 		return
 	}
@@ -314,14 +319,18 @@ func (s *Service) Wait() error {
 }
 
 // scanClients lists the ids of the client channels that exist under the
-// service name. A client that created its channel before the service existed
-// is found here.
+// service name.
 func scanClients(name string) []string {
+	return scanChannels(name, serviceClientPrefix)
+}
+
+// scanChannels lists the ids of the channels that exist under name and a client prefix.
+func scanChannels(name, clientPrefix string) []string {
 	entries, err := os.ReadDir(runtimeDir())
 	if err != nil {
 		return nil
 	}
-	prefix := "go-ipc-" + name + serviceClientPrefix
+	prefix := "go-ipc-" + name + clientPrefix
 	suffix := chanOpenerToCreator + ".name"
 	var ids []string
 	for _, entry := range entries {
@@ -350,33 +359,79 @@ type Client struct {
 	seq     uint64
 }
 
-// Connect connects to the named service. A service that does not exist yet
-// is waited for, parked in the kernel, until ctx ends. A service that exited
-// reports ErrPeerGone from the first call that finds it gone.
+// Connect connects to the named service. A service that does not exist yet is
+// waited for, parked in the kernel, until ctx ends.
 func Connect(ctx context.Context, name string, opts ...Option) (*Client, error) {
 	if err := validateName(name); err != nil {
 		return nil, err
 	}
-	id, err := newIncarnation()
+	return connect(ctx, name, opts, nil)
+}
+
+// connect is Connect after the name check. reg is the service's queue when
+// the caller holds it open already; the knock then goes out on it, and
+// connect closes it.
+func connect(ctx context.Context, name string, opts []Option, reg *Queue) (*Client, error) {
+	ch, ordinal, err := handshake(ctx, name, serviceRegistrySuffix, serviceClientPrefix, serviceOptions(opts), reg)
 	if err != nil {
 		return nil, err
 	}
-	ch, err := CreateChannel(name+serviceClientPrefix+id, serviceOptions(opts)...)
+	return &Client{name: name, ordinal: ordinal, ch: ch, seq: serviceFirstSeq - 1}, nil
+}
+
+// handshake is the client half of a connection. It creates a channel of its
+// own under name and clientPrefix, knocks on the queue name and
+// registrySuffix give, and waits for the hello. It returns the channel and
+// the ordinal the server gave it. reg is that queue when the caller holds it
+// open; handshake closes it.
+func handshake(ctx context.Context, name, registrySuffix, clientPrefix string, opts []Option, reg *Queue) (*Channel, int, error) {
+	id, err := newIncarnation()
 	if err != nil {
-		return nil, fmt.Errorf("ipc: connect %q: %w", name, err)
+		closeQueue(reg)
+		return nil, 0, err
 	}
-	knock(ctx, name, id)
+	ch, err := CreateChannel(name+clientPrefix+id, opts...)
+	if err != nil {
+		closeQueue(reg)
+		return nil, 0, fmt.Errorf("ipc: connect %q: %w", name, err)
+	}
+	knock(ctx, name+registrySuffix, id, reg)
 	typ, msg, err := ch.Recv(ctx)
 	if err == nil && (typ != typeServiceHello || len(msg) != serviceSeqSize) {
-		err = fmt.Errorf("%w: the service sent type %d before hello", ErrCorrupt, typ)
+		err = fmt.Errorf("%w: the server sent type %d before hello", ErrCorrupt, typ)
 	}
 	if err != nil {
 		ch.Close()
 		ch.Unlink()
-		return nil, fmt.Errorf("ipc: connect %q: %w", name, err)
+		return nil, 0, fmt.Errorf("ipc: connect %q: %w", name, err)
 	}
-	ordinal := int(binary.LittleEndian.Uint64(msg))
-	return &Client{name: name, ordinal: ordinal, ch: ch, seq: serviceFirstSeq - 1}, nil
+	return ch, int(binary.LittleEndian.Uint64(msg)), nil
+}
+
+// sendHello gives a client its ordinal, which is the first record on its channel.
+func sendHello(ctx context.Context, ch *Channel, ordinal int) error {
+	var hello [serviceSeqSize]byte
+	binary.LittleEndian.PutUint64(hello[:], uint64(ordinal))
+	return ch.SendTyped(ctx, typeServiceHello, hello[:])
+}
+
+// TryConnect connects to a service that runs now. Where Connect waits for a
+// service to start, TryConnect returns ErrNoService at once when no live
+// process serves the name. A service that still starts is waited for.
+func TryConnect(ctx context.Context, name string, opts ...Option) (*Client, error) {
+	if err := validateName(name); err != nil {
+		return nil, err
+	}
+	q, err := OpenQueue(name + serviceRegistrySuffix)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, ErrPeerGone) {
+		return nil, fmt.Errorf("ipc: connect %q: %w", name, ErrNoService)
+	}
+	if err != nil {
+		// Any other failure leaves the answer to the connect, within ctx.
+		q = nil
+	}
+	// The knock goes out on the queue this check opened.
+	return connect(ctx, name, opts, q)
 }
 
 // serviceOptions puts the service capacity first, so a caller that names its own capacity still wins.
@@ -384,16 +439,23 @@ func serviceOptions(opts []Option) []Option {
 	return append([]Option{WithCapacity(serviceCapacity)}, opts...)
 }
 
-// knock tells a running service about a new client. A service that is not
-// up yet finds the client's channel when it starts, so a failure here costs
-// nothing.
-func knock(ctx context.Context, name, id string) {
-	q, err := OpenQueue(name + serviceRegistrySuffix)
-	if err != nil {
-		return
+// knock tells a running service about a new client. A service that is not up yet finds the client's channel when it starts, so a failure here costs nothing.
+func knock(ctx context.Context, registry, id string, q *Queue) {
+	if q == nil {
+		var err error
+		if q, err = OpenQueue(registry); err != nil {
+			return
+		}
 	}
 	defer q.Close()
 	q.SendTyped(ctx, typeServiceKnock, []byte(id))
+}
+
+// closeQueue closes q when there is one.
+func closeQueue(q *Queue) {
+	if q != nil {
+		q.Close()
+	}
 }
 
 // Name returns the service name.

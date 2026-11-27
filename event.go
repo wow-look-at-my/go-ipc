@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// event.go holds pipeBuf.
+
 package ipc
 
 import (

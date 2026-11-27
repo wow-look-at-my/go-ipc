@@ -251,6 +251,25 @@ TEST(Recovery, SweepRemovesStaleNamesAndLifeSockets)
 	EXPECT_TRUE(keep.try_send(1, {}));
 }
 
+// A sweep that made the name file, even for a moment, would show a name its owner removed.
+TEST(Recovery, SweepMakesNoNameFile)
+{
+	auto name = testutil::unique_name("rec");
+	std::string path = "/dev/shm/go-ipc-" + name + ".name";
+	EXPECT_ANY_THROW(goipc::detail::name_lock::take(name, 0));
+	EXPECT_FALSE(testutil::file_exists(path));
+	goipc::detail::sweep_name(name);
+	EXPECT_FALSE(testutil::file_exists(path));
+
+	{
+		auto held = goipc::detail::name_lock::take(name);
+		EXPECT_ANY_THROW(goipc::detail::name_lock::take(name, 0));
+	}
+	EXPECT_TRUE(testutil::file_exists(path));
+	goipc::detail::sweep_name(name);
+	EXPECT_FALSE(testutil::file_exists(path));
+}
+
 TEST(Recovery, ForkedChildHasItsOwnIdentity)
 {
 	std::uint64_t parent = goipc::detail::self_id();

@@ -33,6 +33,31 @@ func TestRingHeaderLayout(t *testing.T) {
 	assert.Equal(t, 0, r.Buffered())
 }
 
+// TestInitRingLeavesAZeroedDataRegionAlone formats one buffer that holds
+// garbage and one that is new. Both end as the same ring, and the new one
+// keeps its data region unwritten.
+func TestInitRingLeavesAZeroedDataRegionAlone(t *testing.T) {
+	size := RingSize(MinCapacity)
+	dirty := alignedBuffer(size)
+	for i := range dirty {
+		dirty[i] = 0xA5
+	}
+	_, err := initRing(dirty, procID(7), false)
+	require.NoError(t, err)
+
+	fresh := alignedBuffer(size)
+	_, err = initRing(fresh, procID(7), true)
+	require.NoError(t, err)
+	assert.Equal(t, dirty, fresh)
+
+	// A buffer the caller calls zeroed keeps what its data region holds: the ring does not write there.
+	marked := alignedBuffer(size)
+	marked[HeaderSize+100] = 0x5A
+	_, err = initRing(marked, procID(7), true)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x5A), marked[HeaderSize+100])
+}
+
 func TestInitRingRejectsBadBuffers(t *testing.T) {
 	_, err := InitRing(make([]byte, 16))
 	assert.ErrorIs(t, err, ErrTooSmall)

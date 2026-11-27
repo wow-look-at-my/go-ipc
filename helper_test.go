@@ -38,7 +38,7 @@ func waitForWaiters(t *testing.T, q *Queue, recv, send int32) {
 // uniqueName builds a shared-memory name that no other test or concurrent run
 // can collide with. The names live in a system-wide namespace, so the process
 // id has to be part of them.
-func uniqueName(t *testing.T) string {
+func uniqueName(t testing.TB) string {
 	t.Helper()
 	clean := strings.Map(func(r rune) rune {
 		if r == '/' || r == '\\' {

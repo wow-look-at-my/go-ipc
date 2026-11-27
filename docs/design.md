@@ -29,7 +29,7 @@ So an opener never sees a half-built instance. A stale instance is never reused,
 
 A process killed before `Unlink` leaves its instance behind. On Linux that is memory in `/dev/shm`. The first `CreateQueue` or `CreateChannel` in each process sweeps the runtime directory. It removes every name file that no live process holds, with the instance it names. Windows needs no sweep: every object dies with its last handle.
 
-The sweep takes each lock for a moment. A creator that races it on a stale name can get `ErrInUse`, and succeeds when it tries again.
+The sweep takes each lock for a moment. A creator that races it on a stale name can get `ErrInUse`, and succeeds when it tries again. The sweep takes a lock only on a name file that exists, and never makes one. A name that its owner removed therefore does not come back for a moment under a sweep that listed it earlier.
 
 ## Ring layout
 
@@ -43,8 +43,7 @@ Put a pair of such cursors on one line and every producer claim invalidates the 
 | 24 | `consumer`, the procID of the reader | the creator, the channel peer, a close |
 | 128 | `tail` | producers, by compare-and-swap |
 | 256 | `head` | the consumer |
-| 384 | `headCache`, `recvWaiters`, `sendWaiters` | both sides |
-| 512 | claim slots: `owner`, `at`, `size` | the producer that owns the slot |
+| 512 | claim slots | the producer that owns the slot |
 
 A cursor is many bits wide and never wraps in practice. So `tail - head` gives the byte count in flight with no empty-or-full ambiguity. An index into the data region is `cursor & (capacity - 1)`. That is why the capacity is a power of 2.
 

@@ -148,12 +148,13 @@ public:
 	~name_lock() { release(); }
 
 	// take locks the name, or fails with errc::in_use while a live process
-	// holds it.
-	static name_lock take(std::string_view name)
+	// holds it. With the first create it fails with ENOENT when the name
+	// file is gone, and never makes one.
+	static name_lock take(std::string_view name, int create = O_CREAT)
 	{
 		std::string path = name_path(name);
 		for (;;) {
-			int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+			int fd = ::open(path.c_str(), O_RDWR | create | O_CLOEXEC, 0600);
 			if (fd < 0)
 				throw_errno("goipc: open " + path);
 			if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {
@@ -249,7 +250,8 @@ inline void sweep_life(const std::string &path) noexcept
 inline void sweep_name(std::string_view name) noexcept
 {
 	try {
-		name_lock l = name_lock::take(name);
+		// A lock that made the file would show a name its owner removed.
+		name_lock l = name_lock::take(name, 0);
 		std::string inc = l.previous();
 		if (!inc.empty())
 			remove_instance(name, inc);

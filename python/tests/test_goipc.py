@@ -699,9 +699,13 @@ class PeerTest(Named):
 		receiver = support.start(lambda: b.recv(timeout=support.BOUND), "receiver")
 		receiver.started_fn.wait(support.BOUND)
 		a.close()
-		self.assertIsInstance(receiver.finish_error(self), goipc.PeerGone)
+		# A closed creator leaves its name behind, and another process's
+		# best-effort sweep collects an unheld name whenever it runs. So the
+		# opener reads the name while it is fresh, before the join below,
+		# which can take long enough for a sweep to take the name away.
 		with self.assertRaises(goipc.PeerGone):
 			goipc.Channel.open(name)
+		self.assertIsInstance(receiver.finish_error(self), goipc.PeerGone)
 
 
 class LifetimeTest(Named):

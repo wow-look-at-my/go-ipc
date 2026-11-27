@@ -1,5 +1,7 @@
 //go:build cosmo || darwin || linux || windows
 
+// queue.go holds Option.
+
 package ipc
 
 import (
@@ -159,7 +161,8 @@ func (q *Queue) build(reader procID) error {
 	if q.seg, err = shm.Create(inst, RingSize(q.cfg.capacity)); err != nil {
 		return err
 	}
-	if q.ring, err = initRing(q.seg.Data(), reader); err != nil {
+	// shm.Create hands back a new segment, which holds only zeros.
+	if q.ring, err = initRing(q.seg.Data(), reader, true); err != nil {
 		return err
 	}
 	return q.lock.publish(q.inc)
@@ -617,7 +620,7 @@ func (q *Queue) Close() error {
 // already open stay usable until they close.
 func (q *Queue) Unlink() error {
 	err := removeInstance(q.name, q.inc)
-	if uerr := unlinkName(q.name, q.inc); err == nil {
+	if uerr := unlinkName(q.name, q.inc, q.lock); err == nil {
 		err = uerr
 	}
 	if q.lock != nil {

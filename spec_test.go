@@ -298,7 +298,7 @@ func alignedBuffer(n int) []byte {
 
 func replayVector(t *testing.T, c vectorCase) []byte {
 	buf := alignedBuffer(c.BufferSize)
-	r, err := initRing(buf, procID(c.consumer(t)))
+	r, err := initRing(buf, procID(c.consumer(t)), false)
 	require.NoError(t, err)
 
 	for i, op := range c.Ops {

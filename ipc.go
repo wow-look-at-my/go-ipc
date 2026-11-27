@@ -62,6 +62,9 @@ var (
 	// ErrInUse reports a name that a live process holds.
 	ErrInUse = errors.New("ipc: name is in use")
 
+	// ErrNoService reports that no live process serves a service name.
+	ErrNoService = errors.New("ipc: no process serves the name")
+
 	// ErrNotConsumer reports a receive on a handle that does not own the receiving end.
 	ErrNotConsumer = errors.New("ipc: handle is not the receiving end")
 

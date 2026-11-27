@@ -1,5 +1,7 @@
 //go:build unix
 
+// name_unix.go holds nameOutlivesHolder.
+
 package ipc
 
 import (
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/wow-look-at-my/go-ipc/filelock"
 	"golang.org/x/sys/unix"
@@ -41,14 +44,23 @@ func incPath(name string) string {
 type nameLock struct {
 	name string
 	f    *os.File
+	// released is set once release let the lock go.
+	released atomic.Bool
 }
 
-// lockName takes the name, or fails with ErrInUse while a live process
-// holds it.
-func lockName(name string) (*nameLock, error) {
+// held reports a lock that is taken and not yet released.
+func (l *nameLock) held() bool { return l != nil && !l.released.Load() }
+
+// lockName takes the name, or fails with ErrInUse while a live process holds it.
+func lockName(name string) (*nameLock, error) { return lockNameFile(name, os.O_CREATE) }
+
+// lockExistingName is lockName for a name that has its file.
+func lockExistingName(name string) (*nameLock, error) { return lockNameFile(name, 0) }
+
+func lockNameFile(name string, create int) (*nameLock, error) {
 	path := namePath(name)
 	for {
-		f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+		f, err := os.OpenFile(path, os.O_RDWR|create, 0o600)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +100,10 @@ func (l *nameLock) publish(inc string) error {
 	return f.Truncate(int64(len(inc)))
 }
 
-func (l *nameLock) release() error { return l.f.Close() }
+func (l *nameLock) release() error {
+	l.released.Store(true)
+	return l.f.Close()
+}
 
 // unlink has nothing to do. unlinkName removes the name file by its path.
 func (l *nameLock) unlink() error { return nil }
@@ -109,9 +124,20 @@ func readName(name string) (string, error) {
 	return inc, nil
 }
 
-// unlinkName removes the name file while it still points at inc. A newer
-// instance under the same name keeps its file.
-func unlinkName(name, inc string) error {
+// unlinkName removes the name file while it still points at inc. A newer instance under the same name keeps its file.
+//
+// own is the lock of a caller that created the name, and nil for one that opened it. A creator that let its lock go takes the name first: whoever holds it now is a successor. This may not have published its instance yet. The file still points at inc then, and removing it takes the name from under the successor. An opener removes the name of a live creator, as before.
+func unlinkName(name, inc string, own *nameLock) error {
+	if own != nil && !own.held() {
+		lock, err := lockExistingName(name)
+		if errors.Is(err, ErrInUse) || errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		defer lock.release()
+	}
 	content, err := os.ReadFile(incPath(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -171,7 +197,7 @@ func sweepDir(dir string) {
 // behalf of processes that are gone. A failure costs this caller nothing, and
 // the next sweep tries again.
 func sweepName(name string) {
-	lock, err := lockName(name)
+	lock, err := lockExistingName(name)
 	if err != nil {
 		return
 	}
